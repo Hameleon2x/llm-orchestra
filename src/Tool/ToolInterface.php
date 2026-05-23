@@ -24,7 +24,7 @@ interface ToolInterface
      * интерпретировать. Вход (параметры) сюда не повторять — он задаётся getParameters().
      * Пустая строка — без дополнения.
      */
-    public function getSystemPromptDescription(): string;
+    public function appendToSystemPromptAfterUse(): string;
 
     /**
      * @return Property[] свойства для JSON Schema parameters

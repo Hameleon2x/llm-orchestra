@@ -67,7 +67,7 @@ abstract class AbstractToolbox implements ToolboxInterface
     public function systemPromptAddition(string $name): string
     {
         $tool = $this->findByName($name);
-        return $tool !== null ? $tool->getSystemPromptDescription() : '';
+        return $tool !== null ? $tool->appendToSystemPromptAfterUse() : '';
     }
 
     public function findByName(string $name): ?ToolInterface
