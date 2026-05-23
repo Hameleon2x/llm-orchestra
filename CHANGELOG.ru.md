@@ -34,7 +34,7 @@
   - `src/Tool/ToolInterface.php` — метод переименован.
   - `src/Agent/AbstractToolbox.php::systemPromptAddition()` — теперь вызывает `appendToSystemPromptAfterUse()`.
 
-  Каждая тулза, реализующая `ToolInterface` или наследующая `AbstractTool`, должна переименовать метод. См. [UPGRADING.md](UPGRADING.md).
+  Каждая тулза, реализующая `ToolInterface` или наследующая `AbstractTool`, должна переименовать метод. См. [UPGRADING.ru.md](UPGRADING.ru.md).
 
 ## [0.1.0] - 2026-05-23
 

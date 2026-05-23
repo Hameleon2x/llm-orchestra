@@ -36,13 +36,13 @@ if ($response->isSuccess()) {
 
 | Хочу...                                                       | Читать                                                                  |
 |---------------------------------------------------------------|-------------------------------------------------------------------------|
-| Отправить первый запрос                                       | [docs/01-getting-started.md](docs/01-getting-started.md)                |
-| Настроить провайдеров и порядок fallback                      | [docs/02-providers-and-fallback.md](docs/02-providers-and-fallback.md)  |
-| Подключить PSR-3 логирование (Monolog, Yii2 и т. п.)          | [docs/03-logging.md](docs/03-logging.md)                                |
-| Написать свою тулзу (function calling)                        | [docs/04-tools.md](docs/04-tools.md)                                    |
-| Запустить агентский цикл (тулзы + несколько ходов)            | [docs/05-toolbox-and-runner.md](docs/05-toolbox-and-runner.md)          |
-| Получать события агентского цикла (прогресс в UI, лог в БД)   | [docs/06-events.md](docs/06-events.md)                                  |
-| Посмотреть полный индекс документации                         | [docs/README.md](docs/README.md)                                        |
+| Отправить первый запрос                                       | [docs/01-getting-started.md](docs/ru/01-getting-started.md)                |
+| Настроить провайдеров и порядок fallback                      | [docs/02-providers-and-fallback.md](docs/ru/02-providers-and-fallback.md)  |
+| Подключить PSR-3 логирование (Monolog, Yii2 и т. п.)          | [docs/03-logging.md](docs/ru/03-logging.md)                                |
+| Написать свою тулзу (function calling)                        | [docs/04-tools.md](docs/ru/04-tools.md)                                    |
+| Запустить агентский цикл (тулзы + несколько ходов)            | [docs/05-toolbox-and-runner.md](docs/ru/05-toolbox-and-runner.md)          |
+| Получать события агентского цикла (прогресс в UI, лог в БД)   | [docs/06-events.md](docs/ru/06-events.md)                                  |
+| Посмотреть полный индекс документации                         | [docs/README.md](docs/ru/README.md)                                        |
 
 ## Требования
 
@@ -52,8 +52,8 @@ if ($response->isSuccess()) {
 
 ## Версионирование
 
-- [CHANGELOG.md](CHANGELOG.md) — описания релизов.
-- [UPGRADING.md](UPGRADING.md) — руководство по миграции между мажорными версиями.
+- [CHANGELOG.ru.md](CHANGELOG.ru.md) — описания релизов.
+- [UPGRADING.ru.md](UPGRADING.ru.md) — руководство по миграции между мажорными версиями.
 
 ## Лицензия
 
