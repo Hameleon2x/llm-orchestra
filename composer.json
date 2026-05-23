@@ -1,0 +1,42 @@
+{
+    "name": "hameleon2x/llm-orchestra",
+    "description": "PHP LLM client with provider fallback (OpenAI, OpenRouter, Requesty), agent loop with tool calling, typed tool results and PSR-3 logging. Framework-agnostic, no SDK dependencies. PHP 7.4+.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": [
+        "llm",
+        "openai",
+        "openrouter",
+        "requesty",
+        "ai",
+        "tool-calling",
+        "function-calling",
+        "agent",
+        "chatgpt",
+        "llm-client"
+    ],
+    "homepage": "https://github.com/Hameleon2x/llm-orchestra",
+    "authors": [
+        {
+            "name": "Hameleon2x",
+            "email": "hameleon2x@gmail.com",
+            "homepage": "https://github.com/Hameleon2x"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/Hameleon2x/llm-orchestra/issues",
+        "source": "https://github.com/Hameleon2x/llm-orchestra"
+    },
+    "require": {
+        "php": ">=7.4",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "psr/log": "^1.1 || ^2.0 || ^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Hameleon2x\\Llm\\": "src/"
+        }
+    },
+    "minimum-stability": "stable"
+}
