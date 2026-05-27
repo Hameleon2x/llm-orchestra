@@ -14,6 +14,7 @@ Full reference for [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the par
 | `maxTokens`            | `?int`          | `null`                                                               | If `null`, the provider default is used.                                    |
 | `toolChoice`           | `string\|array` | `'auto'`                                                             | `'auto'`, `'required'`, `'none'`, or a forced function (array, see below).  |
 | `plugins`              | `?array`        | `null`                                                               | OpenRouter-specific plugin payload (e.g. web search). `null` — no plugins.  |
+| `extraParams`          | `?array`        | `null`                                                               | Extra payload fields merged into every request of the run (e.g. `session_id`). See below. |
 | `limitNudgeMessage`    | `string`        | `'Лимит обращений к инструментам исчерпан. Дай итоговый ответ ...'`  | User message appended when `maxToolCalls` is hit (see below).               |
 | `limitFallbackText`    | `string`        | `'Не удалось завершить за допустимое число вызовов инструментов.'`   | Fallback answer when the nudge request returns nothing.                     |
 | `turnsExhaustedText`   | `string`        | `'Не удалось завершить за допустимое число итераций.'`               | Final answer when `maxTurns` is hit.                                        |
@@ -92,6 +93,20 @@ $config->plugins = [
 ```
 
 `plugins` is honoured only when the chosen provider accepts the field. For plain OpenAI it is ignored.
+
+## `extraParams` — provider-specific payload fields
+
+Universal escape hatch for fields that the OpenAI-compatible providers accept but the library does not expose as a dedicated `Config` setter — `session_id` on OpenRouter (groups requests in observability; max 256 chars), `user` on OpenAI (end-user identifier), `response_format`, etc.
+
+```php
+$config->extraParams = [
+    'session_id' => 'agent_42_run_17',
+];
+```
+
+These fields are merged into the payload of **every** request the `Runner` makes during the run (initial turns and the limit-finish nudge), so all calls inside one agent run share the same session group. Standard keys (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) always win and cannot be overridden through `extraParams`.
+
+See also [docs/01-getting-started.md](01-getting-started.md#provider-specific-payload-fields) for the request-level `Request::setExtraParams()` equivalent when calling `Client::execute()` directly without the agent loop.
 
 ## See also
 

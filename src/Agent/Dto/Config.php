@@ -23,6 +23,15 @@ class Config
     /** Плагины OpenRouter (напр. web search); null — без плагинов */
     public ?array $plugins = null;
 
+    /**
+     * Произвольные дополнительные поля payload (Request::extraParams) — провайдер-специфичные
+     * расширения без отдельных свойств: session_id у OpenRouter, user у OpenAI и т. п.
+     * Сливаются в payload каждого вызова цикла; стандартные ключи перетереть нельзя.
+     *
+     * @var array<string, mixed>|null
+     */
+    public ?array $extraParams = null;
+
     /** Сообщение пользователя, добавляемое при исчерпании лимита вызовов тулз */
     public string $limitNudgeMessage = 'Лимит обращений к инструментам исчерпан. Дай итоговый ответ на основе уже полученных данных. Если данных не хватает — перечисли, что именно нужно запросить.';
 

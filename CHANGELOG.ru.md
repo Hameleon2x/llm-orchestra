@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-05-27
+
+### Добавлено
+
+- `Agent\Dto\Config::$extraParams` — провайдер-специфичные поля payload, которые `Agent\Runner` пробрасывает в каждый запрос прогона (и итерации цикла, и добивку при исчерпании лимита). Семантика мерджа та же, что у `Request::$extraParams`: стандартные ключи (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) всегда выигрывают. Типовое применение: `$config->extraParams = ['session_id' => 'agent_42_run_17']` — все LLM-вызовы внутри одного запуска агента попадают в одну сессию OpenRouter.
+
 ## [0.2.3] - 2026-05-27
 
 ### Добавлено
@@ -62,7 +68,8 @@
 - Исключения: `LlmException`, `LlmProviderException`, `LlmRateLimitException`, `LlmValidationException`.
 - Перечисления: `Role`, `Status`, `Agent\Enum\Event`.
 
-[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.1.0...v0.2.0

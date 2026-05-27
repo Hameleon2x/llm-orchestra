@@ -7,6 +7,12 @@ All notable changes to `hameleon2x/llm-orchestra` are documented here. Format: [
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-05-27
+
+### Added
+
+- `Agent\Dto\Config::$extraParams` — provider-specific payload fields propagated by `Agent\Runner` into every request of the run (both the main loop turns and the limit-finish nudge). Same merge semantics as `Request::$extraParams`: standard keys (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) always win. Typical use: `$config->extraParams = ['session_id' => 'agent_42_run_17']` to group every LLM call inside one agent run under one OpenRouter session.
+
 ## [0.2.3] - 2026-05-27
 
 ### Added
@@ -62,7 +68,8 @@ Initial public release.
 - Exceptions: `LlmException`, `LlmProviderException`, `LlmRateLimitException`, `LlmValidationException`.
 - Enums: `Role`, `Status`, `Agent\Enum\Event`.
 
-[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.1.0...v0.2.0

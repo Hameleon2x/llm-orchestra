@@ -215,5 +215,8 @@ class Runner
         if ($config->maxTokens !== null) {
             $request->setMaxTokens($config->maxTokens);
         }
+        if ($config->extraParams !== null) {
+            $request->setExtraParams($config->extraParams);
+        }
     }
 }
