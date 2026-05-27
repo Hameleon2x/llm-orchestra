@@ -7,6 +7,12 @@
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-27
+
+### Добавлено
+
+- `Request::setExtraParams(array)` и свойство `Request::$extraParams` — универсальный механизм для провайдер-специфичных полей payload, не покрытых отдельными сеттерами (например, `session_id` у OpenRouter для группировки запросов в observability, `user` у OpenAI для трекинга конечного пользователя, `response_format` и т. п.). Сливаются в OpenAI-совместимый payload в `OpenAiProvider::doExecute()`; стандартные ключи (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) всегда выигрывают — переопределить их через `extraParams` нельзя.
+
 ## [0.2.1] - 2026-05-23
 
 Релиз только по документации. Кода это не касается — drop-in замена 0.2.0.
@@ -56,7 +62,8 @@
 - Исключения: `LlmException`, `LlmProviderException`, `LlmRateLimitException`, `LlmValidationException`.
 - Перечисления: `Role`, `Status`, `Agent\Enum\Event`.
 
-[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Hameleon2x/llm-orchestra/releases/tag/v0.1.0

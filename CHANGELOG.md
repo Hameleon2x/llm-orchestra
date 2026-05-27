@@ -7,6 +7,12 @@ All notable changes to `hameleon2x/llm-orchestra` are documented here. Format: [
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-27
+
+### Added
+
+- `Request::setExtraParams(array)` and the `Request::$extraParams` property — universal escape hatch for provider-specific payload fields not covered by dedicated setters (e.g. `session_id` on OpenRouter for grouping requests in observability, `user` on OpenAI for end-user tracking, `response_format`, etc.). Merged into the OpenAI-compatible payload in `OpenAiProvider::doExecute()`; standard keys (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) always win and cannot be overridden via `extraParams`.
+
 ## [0.2.1] - 2026-05-23
 
 Documentation-only release. No code changes — drop-in replacement for 0.2.0.
@@ -56,7 +62,8 @@ Initial public release.
 - Exceptions: `LlmException`, `LlmProviderException`, `LlmRateLimitException`, `LlmValidationException`.
 - Enums: `Role`, `Status`, `Agent\Enum\Event`.
 
-[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Hameleon2x/llm-orchestra/releases/tag/v0.1.0

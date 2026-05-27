@@ -95,6 +95,12 @@ class OpenAiProvider extends BaseProvider
             $params['plugins'] = $request->plugins;
         }
 
+        if (!empty($request->extraParams)) {
+            // Стандартные ключи всегда выигрывают — extraParams не может перетереть
+            // model/messages/temperature и прочие зарезервированные поля.
+            $params = array_merge($request->extraParams, $params);
+        }
+
         try {
             $raw = $client->chat($params);
 

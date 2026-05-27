@@ -92,6 +92,23 @@ $response = $client->execute(Request::simple('You are concise.', 'Name 3 PHP fra
 echo $response->content;
 ```
 
+## Провайдер-специфичные поля payload
+
+Некоторые провайдеры принимают дополнительные поля payload вне OpenAI-совместимого ядра — например, OpenRouter понимает `session_id` (группирует связанные запросы в их дашборде для observability беседы/агента; максимум 256 символов). OpenAI принимает `user` (идентификатор конечного пользователя для abuse-трекинга). Отдельного сеттера на каждое такое поле в библиотеке нет — передавай их через `setExtraParams()`:
+
+```php
+<?php
+$request = Request::simple('You are concise.', 'Summarize PHP in one line.')
+    ->setExtraParams([
+        'session_id' => 'agent_42_run_17', // OpenRouter — группирует запросы в одну сессию
+        // 'user' => 'user-1234',          // OpenAI — идентификатор конечного пользователя
+    ]);
+
+$response = $client->execute($request);
+```
+
+`extraParams` сливаются в payload внутри `OpenAiProvider`. Стандартные ключи (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) всегда выигрывают — переопределить их таким способом нельзя. Поля, которые конкретный провайдер не понимает, обычно игнорируются на стороне сервера; перед тем как закладываться на конкретный ключ — сверься с документацией нужного провайдера.
+
 ## См. также
 
 - [02-providers-and-fallback.md](02-providers-and-fallback.md) — несколько провайдеров, порядок fallback, повторы.

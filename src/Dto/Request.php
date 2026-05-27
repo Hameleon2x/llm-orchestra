@@ -30,6 +30,16 @@ class Request
     public ?array $plugins = null;
 
     /**
+     * Произвольные дополнительные параметры payload — провайдер-специфичные расширения,
+     * для которых нет отдельного свойства (session_id у OpenRouter, user у OpenAI и т. п.).
+     * Сливаются в payload так, что стандартные ключи (model, messages, temperature, top_p,
+     * max_tokens, tools, tool_choice, seed, plugins) всегда выигрывают.
+     *
+     * @var array<string, mixed>|null
+     */
+    public ?array $extraParams = null;
+
+    /**
      * @param Message[]             $messages
      * @param ToolDefinition[]|null $tools
      * @param string|array|null     $toolChoice
@@ -120,6 +130,23 @@ class Request
     public function setPlugins(array $plugins): self
     {
         $this->plugins = $plugins;
+        return $this;
+    }
+
+    /**
+     * Произвольные дополнительные параметры запроса, которые сольются в payload.
+     * Использовать для провайдер-специфичных полей, не покрытых отдельными сеттерами
+     * (например, `session_id` у OpenRouter, `user` у OpenAI, `response_format` и т. п.).
+     *
+     * Стандартные ключи (model, messages, temperature, top_p, max_tokens, tools,
+     * tool_choice, seed, plugins) перетирают переданные здесь — переопределить их
+     * через extraParams нельзя.
+     *
+     * @param array<string, mixed> $extraParams
+     */
+    public function setExtraParams(array $extraParams): self
+    {
+        $this->extraParams = $extraParams;
         return $this;
     }
 }

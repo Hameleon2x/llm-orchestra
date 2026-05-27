@@ -92,6 +92,23 @@ $response = $client->execute(Request::simple('You are concise.', 'Name 3 PHP fra
 echo $response->content;
 ```
 
+## Provider-specific payload fields
+
+Some providers accept extra payload fields outside the OpenAI-compatible core — for example, OpenRouter understands `session_id` (groups related requests in their dashboard for conversation/agent observability; max 256 chars). OpenAI itself accepts `user` (end-user identifier for abuse tracking). The library does not have a dedicated setter for every such field; instead pass them through `setExtraParams()`:
+
+```php
+<?php
+$request = Request::simple('You are concise.', 'Summarize PHP in one line.')
+    ->setExtraParams([
+        'session_id' => 'agent_42_run_17', // OpenRouter — groups requests under one session
+        // 'user' => 'user-1234',          // OpenAI — end-user identifier
+    ]);
+
+$response = $client->execute($request);
+```
+
+`extraParams` are merged into the payload by `OpenAiProvider`. Standard keys (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) always win — you cannot override them this way. Unknown fields a given provider does not understand are typically ignored on the server side; check the target provider's docs before relying on a specific key.
+
 ## See also
 
 - [02-providers-and-fallback.md](02-providers-and-fallback.md) — multiple providers, fallback order, retries.
