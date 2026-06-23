@@ -55,9 +55,12 @@ new Property(
 ```php
 Result::ok(array $data = []);   // success — $data is a flat assoc array or list, serialised as-is
 Result::error(string $message); // failure — wrapped as ['error' => $message] in the tool message
+Result::suspend();              // pause — no result yet; supplied from outside (human-in-the-loop)
 ```
 
 `Result::toJsonArray()` is called by the `Runner` to build the OpenAI `tool` message content. The wire format is intentionally simple — recent models are trained on the `{"error": "..."}` convention for failures, and bare JSON for successes.
+
+`Result::suspend()` is a third outcome: the tool returns no data and asks the loop to pause until an external result (a user's answer, an approval) is supplied. See [13-human-in-the-loop.md](13-human-in-the-loop.md).
 
 ## Worked example: `get_weather`
 

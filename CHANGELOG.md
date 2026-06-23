@@ -7,6 +7,18 @@ All notable changes to `hameleon2x/llm-orchestra` are documented here. Format: [
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-23
+
+### Added
+
+- **Human-in-the-loop / elicitation** — a tool can pause the agent loop to wait for external input (a user's answer, an approval) and resume later. Additive and backward-compatible. New guide: [docs/13-human-in-the-loop.md](docs/13-human-in-the-loop.md).
+  - `Tool\Dto\Result::suspend()` and `Result::isSuspended()` — a third tool outcome besides `ok()` / `error()`: the tool returns no result now; it will be supplied from outside.
+  - `Agent\Runner` — executes the non-suspend tools of the turn normally, collects the ids of suspended tool calls (no `tool` message written for them), and stops after the turn, returning a suspended `Agent\Dto\Result` instead of calling the model again. Mixed turns are allowed: a suspend may sit alongside ordinary tools, which run as usual.
+  - `Agent\Dto\Result::$suspended` (`bool`), `Agent\Dto\Result::$pendingToolCallIds` (`string[]`), and the `Agent\Dto\Result::suspended()` factory. Resume by appending one `Message::tool($id, $answer)` per pending id and calling `run()` again — the `Runner` stays stateless, there is no dedicated resume API.
+  - `Agent\Runner::run()` is resumable: before each model call it completes any tool calls in the history still missing a `tool` message — ordinary tools run, suspend tools re-pause. This recovers a run interrupted mid-execution (worker crash) and makes resuming a suspended run before its answers are supplied a harmless re-pause instead of a malformed request. Re-execution is at-least-once (make side-effecting tools idempotent). The per-turn tool-execution path is factored into one method shared by the loop and resume.
+  - When `maxToolCalls` runs out mid-turn, the remaining un-executed tool calls of that turn are now closed with an error `tool` message instead of left unanswered — keeping the history valid (every `tool_call` has a response) for the limit-finish request and for any later resume.
+  - `Event::TOOL_CALL` is now emitted once per call when the model requests it (up front, with the assistant turn), not per execution — `executeToolCalls` emits only `TOOL_RESULT`. So re-executed calls on resume emit just the missing `TOOL_RESULT`, with no duplicate `TOOL_CALL` events.
+
 ## [0.2.4] - 2026-05-27
 
 ### Added
@@ -68,7 +80,8 @@ Initial public release.
 - Exceptions: `LlmException`, `LlmProviderException`, `LlmRateLimitException`, `LlmValidationException`.
 - Enums: `Role`, `Status`, `Agent\Enum\Event`.
 
-[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.0...v0.2.1

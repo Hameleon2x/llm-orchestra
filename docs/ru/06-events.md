@@ -26,7 +26,7 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 
 ### `Event::TOOL_CALL` — `'tool_call'`
 
-Срабатывает один раз на каждый вызов тулзы, прямо перед запуском `execute()`.
+Срабатывает один раз на каждый запрошенный моделью вызов — пачкой, в момент получения ответа ассистента, до какого-либо `execute()`. (При возобновлении перезапускаемые вызовы `TOOL_CALL` повторно не шлют — только их `TOOL_RESULT`.)
 
 - `$content` — имя тулзы (оно же в `$meta['tool']`).
 - `$meta['tool_call_id']` — OpenAI `id`; парный к соответствующему `TOOL_RESULT`.
@@ -42,7 +42,9 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 - `$meta['tool']` — имя тулзы.
 - `$meta['ok']` — `bool`, значение `Tool\Dto\Result::$ok`. Отличает ошибки тулзы (тулза отработала, но сообщила о провале) от успехов.
 
-Порядок внутри одного хода: `ASSISTANT_MESSAGE` → `TOOL_CALL` → `TOOL_RESULT` → (следующая пара `TOOL_CALL` / `TOOL_RESULT`, если запросили больше одной тулзы) → цикл продолжается.
+Порядок внутри одного хода: `ASSISTANT_MESSAGE` → по одному `TOOL_CALL` на каждый запрошенный вызов (все сразу, при получении ответа модели) → по одному `TOOL_RESULT` на вызов по мере исполнения → цикл продолжается.
+
+**Приостановленные вызовы (human-in-the-loop):** тулза, вернувшая `Result::suspend()`, всё равно эмитит `TOOL_CALL` (чтобы UI отрисовал вопрос/виджет), но **не** `TOOL_RESULT` — результата ещё нет. После хода прогон останавливается. При возобновлении раннер дорешивает только неотвеченные вызовы и эмитит лишь их `TOOL_RESULT` (`TOOL_CALL` уже был отправлен один раз), так что сохранённые события не задваиваются. См. [13-human-in-the-loop.md](13-human-in-the-loop.md).
 
 ## Сценарий: живой прогресс в UI
 
@@ -111,4 +113,5 @@ $emit = function (string $event, string $content, array $meta) use ($db, $dialog
 ## См. также
 
 - [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — откуда зовётся `$emit`.
+- [13-human-in-the-loop.md](13-human-in-the-loop.md) — `TOOL_CALL` без `TOOL_RESULT`, когда тулза встаёт на паузу.
 - [03-logging.md](03-logging.md) — PSR-3 канал для повторов / fallback; дополняет этот UI-ориентированный поток.

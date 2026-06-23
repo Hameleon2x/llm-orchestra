@@ -55,9 +55,12 @@ new Property(
 ```php
 Result::ok(array $data = []);   // success — $data is a flat assoc array or list, serialised as-is
 Result::error(string $message); // failure — wrapped as ['error' => $message] in the tool message
+Result::suspend();              // пауза — результата ещё нет; поступит извне (human-in-the-loop)
 ```
 
 `Result::toJsonArray()` вызывает `Runner` при сборке контента OpenAI-сообщения `tool`. Формат API намеренно простой: современные модели натренированы на соглашение `{"error": "..."}` для ошибок и голый JSON для успехов.
+
+`Result::suspend()` — третий исход: тулза не возвращает данные, а просит цикл встать на паузу, пока не будет предоставлен внешний результат (ответ пользователя, апрув). См. [13-human-in-the-loop.md](13-human-in-the-loop.md).
 
 ## Разобранный пример: `get_weather`
 

@@ -18,6 +18,7 @@ LLM-friendly map of `docs/`. Find the page that matches your symptom.
 | Exception hierarchy, retry/backoff, `Status` enum                                           | [10-error-handling.md](10-error-handling.md)                  |
 | Replace `CurlChatClient` (mock for tests, Guzzle, middleware)                               | [11-custom-http-client.md](11-custom-http-client.md)          |
 | Implement a custom provider (extend `BaseProvider`)                                         | [12-custom-provider.md](12-custom-provider.md)                |
+| Pause the loop for user input (approval, ask-the-user), then resume                         | [13-human-in-the-loop.md](13-human-in-the-loop.md)            |
 | Layers, data flow, why so many of them                                                      | [architecture.md](architecture.md)                            |
 
 Root-level docs: [`../README.md`](../README.md) (install + quickstart), [`../CHANGELOG.md`](../CHANGELOG.md), [`../UPGRADING.md`](../UPGRADING.md).

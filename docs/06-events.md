@@ -26,7 +26,7 @@ Fires once per turn, immediately after the model returns a response that contain
 
 ### `Event::TOOL_CALL` — `'tool_call'`
 
-Fires once per tool invocation, right before `execute()` runs.
+Fires once per call the model requested, emitted up front when the assistant response arrives — before any `execute()`. (On resume, re-executed calls do not re-fire `TOOL_CALL`; only their `TOOL_RESULT`.)
 
 - `$content` — tool name (also in `$meta['tool']`).
 - `$meta['tool_call_id']` — OpenAI `id`; pairs this with the matching `TOOL_RESULT`.
@@ -42,7 +42,9 @@ Fires once per tool invocation, right after `execute()` returns.
 - `$meta['tool']` — tool name.
 - `$meta['ok']` — `bool`, value of `Tool\Dto\Result::$ok`. Distinguishes tool errors (the tool ran but reported failure) from successes.
 
-Order within a single turn: `ASSISTANT_MESSAGE` → `TOOL_CALL` → `TOOL_RESULT` → (next `TOOL_CALL` / `TOOL_RESULT` pair if more than one tool was requested) → loop continues.
+Order within a single turn: `ASSISTANT_MESSAGE` → one `TOOL_CALL` per requested call (all up front, when the model's response arrives) → one `TOOL_RESULT` per call as it executes → loop continues.
+
+**Suspended calls (human-in-the-loop):** a tool that returns `Result::suspend()` still emits `TOOL_CALL` (so the UI can render the prompt/widget) but **no** `TOOL_RESULT` — there is no result yet. The run stops after the turn. On resume the runner re-executes only the still-unanswered calls and emits just their `TOOL_RESULT` (the up-front `TOOL_CALL` already fired), so persisted events don't duplicate. See [13-human-in-the-loop.md](13-human-in-the-loop.md).
 
 ## Use case: live UI progress
 
@@ -111,4 +113,5 @@ If the run is killed (worker timeout, deploy mid-flight), the events written so 
 ## See also
 
 - [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — where `$emit` is called from.
+- [13-human-in-the-loop.md](13-human-in-the-loop.md) — `TOOL_CALL` without `TOOL_RESULT` when a tool suspends.
 - [03-logging.md](03-logging.md) — PSR-3 channel for retries/fallbacks; complementary to this UI-facing stream.

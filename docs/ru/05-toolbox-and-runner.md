@@ -87,6 +87,8 @@ public function run(
 | `$turnsUsed`     | `int`               | Потрачено итераций (1..`maxTurns`).                                                 |
 | `$toolCallsUsed` | `int`               | Потрачено вызовов тулз (0..`maxToolCalls`).                                         |
 | `$usage`         | `Agent\Dto\Usage`   | `llmCalls`, `promptTokens`, `completionTokens`, `totalTokens` за весь запуск.       |
+| `$suspended`         | `bool`      | `true`, когда прогон встал на паузу на suspend-тулзе в ожидании внешнего ввода (human-in-the-loop). `$content` / `$error` — `null`. |
+| `$pendingToolCallIds`| `string[]`  | При `$suspended` — id вызовов, чьи результаты нужно подать для возобновления; см. [13-human-in-the-loop.md](13-human-in-the-loop.md). |
 
 Упор в `maxTurns` или `maxToolCalls` даёт `success = true` с одним из настроенных fallback-текстов в `$content` — это не ошибка, запуск завершился штатно. Смотри `$turnsUsed` / `$toolCallsUsed`, чтобы поймать насыщение.
 
@@ -161,5 +163,6 @@ printf(
 
 - [04-tools.md](04-tools.md) — контракт `ToolInterface`.
 - [06-events.md](06-events.md) — `$emit`-callback для прогресса внутри цикла.
+- [13-human-in-the-loop.md](13-human-in-the-loop.md) — пауза цикла на внешний ввод (`Result::suspend()`) и возобновление.
 - [02-providers-and-fallback.md](02-providers-and-fallback.md) — как нижележащий `Client` выбирает провайдера.
 - [03-logging.md](03-logging.md) — отдельный PSR-3 канал для повторов и fallback.

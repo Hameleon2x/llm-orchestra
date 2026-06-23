@@ -18,11 +18,19 @@ final class Result
 
     public ?string $error;
 
-    private function __construct(bool $ok, array $data, ?string $error)
+    /**
+     * Тулза просит приостановить агентский цикл: результата сейчас нет, он будет предоставлен
+     * извне (ответ пользователя, внешнее событие) и подставлен как tool-сообщение этого вызова
+     * при возобновлении. Human-in-the-loop / elicitation. См. Runner и Agent\Dto\Result::suspended().
+     */
+    public bool $suspended;
+
+    private function __construct(bool $ok, array $data, ?string $error, bool $suspended = false)
     {
         $this->ok = $ok;
         $this->data = $data;
         $this->error = $error;
+        $this->suspended = $suspended;
     }
 
     public static function ok(array $data = []): self
@@ -36,6 +44,24 @@ final class Result
     public static function error(string $message): self
     {
         return new self(false, [], $message);
+    }
+
+    /**
+     * Приостановить агентский цикл: тулза не возвращает результат сейчас. Раннер остановит прогон
+     * и вернёт Agent\Dto\Result::suspended() с id этого вызова; внешний код предоставит результат
+     * позже (например, ответ пользователя) и подставит его как tool-сообщение при возобновлении.
+     *
+     * Suspend-тулза должна вызываться единственным tool-call в ходе — иначе раннер понизит вызов
+     * до ошибки (остальные вызовы остались бы без ответа и сломали историю).
+     */
+    public static function suspend(): self
+    {
+        return new self(false, [], null, true);
+    }
+
+    public function isSuspended(): bool
+    {
+        return $this->suspended;
     }
 
     /**

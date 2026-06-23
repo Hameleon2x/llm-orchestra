@@ -7,6 +7,18 @@
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-06-23
+
+### Добавлено
+
+- **Human-in-the-loop / elicitation** — тулза может приостановить агентский цикл в ожидании внешнего ввода (ответ пользователя, апрув) и возобновиться позже. Аддитивно и обратносовместимо. Новый гайд: [docs/13-human-in-the-loop.md](docs/ru/13-human-in-the-loop.md).
+  - `Tool\Dto\Result::suspend()` и `Result::isSuspended()` — третий исход тулзы помимо `ok()` / `error()`: результата сейчас нет, он поступит извне.
+  - `Agent\Runner` — исполняет не-suspend тулзы хода как обычно, собирает id приостановленных вызовов (`tool`-сообщение для них не пишется) и после хода останавливается, возвращая приостановленный `Agent\Dto\Result` вместо нового обращения к модели. Смешанный ход допустим: suspend может соседствовать с обычными тулзами, которые отрабатывают штатно.
+  - `Agent\Dto\Result::$suspended` (`bool`), `Agent\Dto\Result::$pendingToolCallIds` (`string[]`) и фабрика `Agent\Dto\Result::suspended()`. Возобновление — дописать по `Message::tool($id, $answer)` на каждый ожидающий id и снова вызвать `run()`; `Runner` остаётся stateless, отдельного resume-API нет.
+  - `Agent\Runner::run()` теперь резюмируем: перед каждым обращением к модели он дорешивает любые tool_call'ы истории, оставшиеся без `tool`-сообщения — обычные тулзы исполняются, suspend снова приостанавливаются. Это восстанавливает прогон, прерванный посреди исполнения (краш воркера), и превращает возобновление приостановленного прогона до подачи ответов в безвредную повторную паузу вместо «битого» запроса. Перевыполнение — at-least-once (тулзы с побочками делайте идемпотентными). Путь исполнения тулз хода вынесен в один метод, общий для цикла и возобновления.
+  - При исчерпании `maxToolCalls` посреди хода оставшиеся неисполненные вызовы этого хода теперь закрываются tool-ошибкой, а не остаются без ответа — история остаётся валидной (у каждого `tool_call` есть ответ) и для добивки по лимиту, и для последующего возобновления.
+  - `Event::TOOL_CALL` теперь эмитится один раз на вызов, когда модель его запросила (пачкой, с ассистентским ходом), а не на каждое исполнение — `executeToolCalls` шлёт только `TOOL_RESULT`. Поэтому перезапускаемые при возобновлении вызовы эмитят лишь недостающий `TOOL_RESULT`, без дублей событий `TOOL_CALL`.
+
 ## [0.2.4] - 2026-05-27
 
 ### Добавлено
@@ -68,7 +80,8 @@
 - Исключения: `LlmException`, `LlmProviderException`, `LlmRateLimitException`, `LlmValidationException`.
 - Перечисления: `Role`, `Status`, `Agent\Enum\Event`.
 
-[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...v0.2.3
 [0.2.1]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.0...v0.2.1

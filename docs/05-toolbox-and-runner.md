@@ -87,6 +87,8 @@ public function run(
 | `$turnsUsed`     | `int`               | Iterations consumed (1..`maxTurns`).                                               |
 | `$toolCallsUsed` | `int`               | Tool invocations consumed (0..`maxToolCalls`).                                     |
 | `$usage`         | `Agent\Dto\Usage`   | `llmCalls`, `promptTokens`, `completionTokens`, `totalTokens` across the run.       |
+| `$suspended`         | `bool`      | `true` when the run paused on a suspend-tool waiting for external input (human-in-the-loop). `$content` / `$error` are `null`. |
+| `$pendingToolCallIds`| `string[]`  | When `$suspended`, the tool-call ids whose results must be supplied to resume — see [13-human-in-the-loop.md](13-human-in-the-loop.md). |
 
 Hitting `maxTurns` or `maxToolCalls` produces `success = true` with one of the configured fallback texts as `$content` — it's not an error, the run completed gracefully. Inspect `$turnsUsed` / `$toolCallsUsed` to detect saturation.
 
@@ -161,5 +163,6 @@ printf(
 
 - [04-tools.md](04-tools.md) — `ToolInterface` contract.
 - [06-events.md](06-events.md) — `$emit` callback for in-loop progress.
+- [13-human-in-the-loop.md](13-human-in-the-loop.md) — pause the loop for external input (`Result::suspend()`) and resume.
 - [02-providers-and-fallback.md](02-providers-and-fallback.md) — how the underlying `Client` chooses a provider.
 - [03-logging.md](03-logging.md) — the separate PSR-3 channel for retries/fallbacks.

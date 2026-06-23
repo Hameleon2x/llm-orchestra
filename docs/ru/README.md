@@ -18,6 +18,7 @@ LLM-дружелюбная карта `docs/`. Найди страницу по 
 | Иерархия исключений, retry/backoff, enum `Status`                                               | [10-error-handling.md](10-error-handling.md)              |
 | Замена `CurlChatClient` (мок для тестов, Guzzle, middleware)                                    | [11-custom-http-client.md](11-custom-http-client.md)      |
 | Реализовать кастомный провайдер (наследовать `BaseProvider`)                                    | [12-custom-provider.md](12-custom-provider.md)            |
+| Поставить цикл на паузу ради ввода пользователя (апрув, вопрос) и возобновить                   | [13-human-in-the-loop.md](13-human-in-the-loop.md)        |
 | Слои, поток данных, зачем их столько                                                            | [architecture.md](architecture.md)                        |
 
 Документы верхнего уровня: [`../../README.ru.md`](../../README.ru.md) (установка + быстрый старт), [`../../CHANGELOG.ru.md`](../../CHANGELOG.ru.md), [`../../UPGRADING.ru.md`](../../UPGRADING.ru.md).

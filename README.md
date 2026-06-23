@@ -42,6 +42,7 @@ if ($response->isSuccess()) {
 | Write my own tool (function calling)                          | [docs/04-tools.md](docs/04-tools.md)                                    |
 | Run an agent loop (tools + multi-turn)                        | [docs/05-toolbox-and-runner.md](docs/05-toolbox-and-runner.md)          |
 | Stream events from the agent loop (UI progress, DB logging)   | [docs/06-events.md](docs/06-events.md)                                  |
+| Pause for user input and resume (human-in-the-loop)           | [docs/13-human-in-the-loop.md](docs/13-human-in-the-loop.md)            |
 | See the full doc index                                        | [docs/README.md](docs/README.md)                                        |
 
 ## Requirements

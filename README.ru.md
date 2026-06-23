@@ -42,6 +42,7 @@ if ($response->isSuccess()) {
 | Написать свою тулзу (function calling)                        | [docs/04-tools.md](docs/ru/04-tools.md)                                    |
 | Запустить агентский цикл (тулзы + несколько ходов)            | [docs/05-toolbox-and-runner.md](docs/ru/05-toolbox-and-runner.md)          |
 | Получать события агентского цикла (прогресс в UI, лог в БД)   | [docs/06-events.md](docs/ru/06-events.md)                                  |
+| Пауза ради ввода пользователя и возобновление (human-in-the-loop) | [docs/13-human-in-the-loop.md](docs/ru/13-human-in-the-loop.md)        |
 | Посмотреть полный индекс документации                         | [docs/README.md](docs/ru/README.md)                                        |
 
 ## Требования
