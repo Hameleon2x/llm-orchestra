@@ -3,6 +3,7 @@
 namespace Hameleon2x\Llm\Agent;
 
 use Hameleon2x\Llm\Dto\ToolDefinition;
+use Hameleon2x\Llm\Tool\AbstractTool;
 use Hameleon2x\Llm\Tool\Dto\Result;
 use Hameleon2x\Llm\Tool\SchemaBuilder;
 use Hameleon2x\Llm\Tool\ToolInterface;
@@ -64,10 +65,16 @@ abstract class AbstractToolbox implements ToolboxInterface
         return $tool->execute($args);
     }
 
-    public function systemPromptAddition(string $name): string
+    public function firstUseHint(string $name): string
     {
         $tool = $this->findByName($name);
-        return $tool !== null ? $tool->appendToSystemPromptAfterUse() : '';
+        return $tool !== null ? $tool->firstUseHint() : '';
+    }
+
+    public function firstUseHintKey(string $name): string
+    {
+        $tool = $this->findByName($name);
+        return $tool !== null ? $tool->firstUseHintKey() : AbstractTool::DEFAULT_FIRST_USE_HINT_KEY;
     }
 
     public function findByName(string $name): ?ToolInterface

@@ -16,20 +16,21 @@
 |---------------------------------------|------------------|---------------------------------------------------------------------------------------------------------------|
 | `getName()`                           | `string`         | Имя функции, которое уходит модели (например `get_weather`). Должно укладываться в `[a-zA-Z0-9_-]`.           |
 | `getDescription()`                    | `string`         | Когда и зачем модели вызывать эту тулзу. Идёт в списке `tools` каждого запроса.                                |
-| `appendToSystemPromptAfterUse()`      | `string`         | Заметки, дописываемые в **system**-промт только после того, как тулзу хотя бы раз вызвали. Описывает форму *вывода*, а не входа. `''` — если ничего не дописывать. |
+| `firstUseHint()`                      | `string`         | Пояснение, подмешиваемое в **результат** тулзы (не в system-промт) под ключом `firstUseHintKey()`, при первом вызове тулзы в диалоге. Описывает форму *вывода*, а не входа. `''` — если ничего не дописывать (дефолт в `AbstractTool`). |
+| `firstUseHintKey()`                   | `string`         | Имя ключа, под которым пояснение кладётся в результат. Дефолт `hint_use` (`AbstractTool::DEFAULT_FIRST_USE_HINT_KEY`); переопредели, если конфликтует с полем результата. |
 | `getParameters()`                     | `Property[]`     | JSON Schema параметров, по одному `Property` на аргумент.                                                     |
 | `execute(array $args)`                | `Tool\Dto\Result`| Запустить тулзу; `$args` — раскодированный JSON от модели.                                                    |
 | `shouldDisplay(array $args)`          | `bool`           | UI-хинт: показывать ли этот вызов в чате (виджет, превью). К выполнению отношения не имеет.                   |
 
 ### `AbstractTool`
 
-`Hameleon2x\Llm\Tool\AbstractTool` — тонкий базовый класс с одним дефолтом: `shouldDisplay(): bool = false`. Всё остальное реализуешь сам.
+`Hameleon2x\Llm\Tool\AbstractTool` — тонкий базовый класс с дефолтами `shouldDisplay(): bool = false`, `firstUseHint(): string = ''` и `firstUseHintKey(): string = 'hint_use'`. Всё остальное реализуешь сам.
 
-### Почему `appendToSystemPromptAfterUse()`, а не `getDescription()`?
+### Почему `firstUseHint()`, а не `getDescription()`?
 
 `getDescription()` лежит в массиве `tools` на каждом запросе и подталкивает модель к вызову («используй меня»). Держи описание коротким и сфокусированным на вызове.
 
-`appendToSystemPromptAfterUse()` дописывается в **system**-промт только на тех ходах, где тулза уже появлялась в истории диалога (этим управляет `Agent\SystemPromptComposer`). Используй, чтобы напомнить модели, как читать собственный вывод: `temperatureC` — в градусах Цельсия, пустой массив `results` значит «ничего не найдено», `status: closed` значит «дело закрыто». Тогда на следующих ходах модель корректно интерпретирует результат и не приходится тратить токены, проговаривая это каждый раз заранее.
+`firstUseHint()` подмешивается в **результат** тулзы — под ключом `firstUseHintKey()` (дефолт `hint_use`) — при **первом** вызове этой тулзы в диалоге, силами `Agent\Runner`. Используй, чтобы напомнить модели, как читать собственный вывод: `temperatureC` — в градусах Цельсия, пустой массив `results` значит «ничего не найдено», `status: closed` значит «дело закрыто» — прямо рядом с данными, которые описываешь. Пояснение попадает в результат, а не в системный промт, поэтому системный промт остаётся стабильным префиксом и prompt-кеш провайдера не сбрасывается каждый ход. Верни `''` (дефолт из `AbstractTool`), если добавлять нечего — тогда ключ в результат не кладётся.
 
 ## `Property`
 
@@ -84,7 +85,7 @@ final class GetWeatherTool extends AbstractTool
             . 'temperature, or conditions for a named place.';
     }
 
-    public function appendToSystemPromptAfterUse(): string
+    public function firstUseHint(): string
     {
         return 'get_weather returns {city: string, temperatureC: number, condition: string}. '
             . '`condition` is one of: clear, cloudy, rain, snow, storm. `temperatureC` is in Celsius.';
@@ -115,7 +116,7 @@ final class GetWeatherTool extends AbstractTool
 
 - `getName()` — попадает в OpenAI `function.name`. Не меняй просто так: история диалога ссылается на это имя.
 - `getDescription()` — верхняя строка «что и когда». Явно упоминай триггер, чтобы модель выбирала тулзу на нужных ходах.
-- `appendToSystemPromptAfterUse()` — схема вывода и пограничные случаи. Живёт в system-промте с первого использования.
+- `firstUseHint()` — схема вывода и пограничные случаи. Подмешивается в результат тулзы при первом использовании, под ключом `firstUseHintKey()` (дефолт `hint_use`).
 - `getParameters()` — входы. Реально обязательные параметры помечай `required = true`; модель по этому понимает, хватает ли ей данных.
 - `execute()` — валидируй `$args` оборонительно (модель умеет галлюцинировать). На любую ошибку возвращай `Result::error(...)` — текст уходит в диалог, и модель сможет восстановиться.
 - `shouldDisplay()` — только UI-хинт; к выполнению отношения не имеет.

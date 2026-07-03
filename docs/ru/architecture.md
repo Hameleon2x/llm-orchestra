@@ -7,7 +7,7 @@
 ## Слои
 
 ```
-Agent      Runner / Toolbox / Tool / SystemPromptComposer  (multi-turn loop, tools)
+Agent      Runner / Toolbox / Tool  (multi-turn loop, tools)
    |
 Client     fallback chain, PSR-3 logging, generation defaults
    |
@@ -50,7 +50,7 @@ caller <--Response--
 ```
 caller --messages, toolbox, systemPromptFn, config--> Runner.run
   for each turn (up to config.maxTurns):
-    systemPrompt = SystemPromptComposer.compose(base, history, toolbox)
+    systemPrompt = systemPromptFn(history)   // as-is, без изменений
     Response = Client.execute(Request{system + history + tools})
     Usage.add(Response)
     if !Response.isSuccess()      -> Result::error
@@ -64,7 +64,7 @@ caller --messages, toolbox, systemPromptFn, config--> Runner.run
 caller <--Result--
 ```
 
-`SystemPromptComposer` пересобирает промт каждый ход, чтобы можно было дописывать текст из `appendToSystemPromptAfterUse()` для уже использованных тулз. `Tool\Dto\Result` — типизированный возврат каждой тулзы, сериализуется в JSON для сообщения `tool`. `Usage` накапливает счётчики токенов — см. [docs/09-usage-and-limits.md](09-usage-and-limits.md).
+Системный промт неизменен между оборотами — `$systemPromptFn` используется as-is. `firstUseHint()` тулзы подмешивается в её **результат** (под ключом `firstUseHintKey()`, дефолт `hint_use`) при первом вызове этой тулзы в диалоге, поэтому пояснения по тулзам едут вместе с данными, а не меняют префикс промта. `Tool\Dto\Result` — типизированный возврат каждой тулзы, сериализуется в JSON для сообщения `tool`. `Usage` накапливает счётчики токенов — см. [docs/09-usage-and-limits.md](09-usage-and-limits.md).
 
 ## Структура исходников
 
@@ -73,7 +73,6 @@ src/
 ├── Client.php                              fallback chain, PSR-3 logging, withProviders()
 ├── Agent/
 │   ├── Runner.php                          agent loop
-│   ├── SystemPromptComposer.php            base prompt + tool-usage notes
 │   ├── ToolboxInterface.php / AbstractToolbox.php
 │   ├── Dto/{Config,Result,Usage}.php       per-run params / result / token counters
 │   └── Enum/Event.php                      events emitted via $emit
@@ -97,7 +96,7 @@ src/
 
 - **Http vs Provider** — HTTP-транспорт (cURL, Guzzle, fake) ортогонален формату API. См. [docs/11-custom-http-client.md](11-custom-http-client.md).
 - **Provider vs Client** — провайдер знает один формат API; клиент держит fallback и PSR-3. См. [docs/02-providers-and-fallback.md](02-providers-and-fallback.md).
-- **Client vs Agent** — `Client::execute()` — одношаговый RPC; `Runner` — stateful-цикл с тулзами, наращиванием промта и лимитами на прогон.
+- **Client vs Agent** — `Client::execute()` — одношаговый RPC; `Runner` — stateful-цикл с тулзами и лимитами на прогон.
 - **DTOs vs Factories** — типизированные DTO (`Message`, `ToolCall`, `ToolDefinition`) плюс фабрики, выдающие массивы в форме OpenAI — и для формата API провайдера, и для транспорта между фронтом и бэком. См. [docs/07-history-serialization.md](07-history-serialization.md).
 
 ## См. также

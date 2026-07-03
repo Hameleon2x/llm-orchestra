@@ -7,7 +7,7 @@ How the package is layered, what each layer owns, and what flows through it.
 ## Layers
 
 ```
-Agent      Runner / Toolbox / Tool / SystemPromptComposer  (multi-turn loop, tools)
+Agent      Runner / Toolbox / Tool  (multi-turn loop, tools)
    |
 Client     fallback chain, PSR-3 logging, generation defaults
    |
@@ -50,7 +50,7 @@ Retries inside a single provider: 1s → 2s → 4s → 8s (cap 10s). Fallback be
 ```
 caller --messages, toolbox, systemPromptFn, config--> Runner.run
   for each turn (up to config.maxTurns):
-    systemPrompt = SystemPromptComposer.compose(base, history, toolbox)
+    systemPrompt = systemPromptFn(history)   // used as-is
     Response = Client.execute(Request{system + history + tools})
     Usage.add(Response)
     if !Response.isSuccess()      -> Result::error
@@ -64,7 +64,7 @@ caller --messages, toolbox, systemPromptFn, config--> Runner.run
 caller <--Result--
 ```
 
-`SystemPromptComposer` rebuilds the prompt each turn so `appendToSystemPromptAfterUse()` text for tools already used can be appended. `Tool\Dto\Result` is the typed return from every tool, serialised to JSON for the `tool` message. `Usage` accumulates token counters — see [docs/09-usage-and-limits.md](09-usage-and-limits.md).
+The system prompt is stable across turns — `$systemPromptFn` is used as-is. A tool's `firstUseHint()` is injected into its **result** (under `firstUseHintKey()`, default `hint_use`) on the first call of that tool in the dialogue, so tool-usage notes ride with the data instead of mutating the prompt prefix. `Tool\Dto\Result` is the typed return from every tool, serialised to JSON for the `tool` message. `Usage` accumulates token counters — see [docs/09-usage-and-limits.md](09-usage-and-limits.md).
 
 ## Source layout
 
@@ -73,7 +73,6 @@ src/
 ├── Client.php                              fallback chain, PSR-3 logging, withProviders()
 ├── Agent/
 │   ├── Runner.php                          agent loop
-│   ├── SystemPromptComposer.php            base prompt + tool-usage notes
 │   ├── ToolboxInterface.php / AbstractToolbox.php
 │   ├── Dto/{Config,Result,Usage}.php       per-run params / result / token counters
 │   └── Enum/Event.php                      events emitted via $emit
@@ -97,7 +96,7 @@ src/
 
 - **Http vs Provider** — the HTTP transport (cURL, Guzzle, fake) is orthogonal to the API shape. See [docs/11-custom-http-client.md](11-custom-http-client.md).
 - **Provider vs Client** — provider knows one wire format; client owns fallback and PSR-3. See [docs/02-providers-and-fallback.md](02-providers-and-fallback.md).
-- **Client vs Agent** — `Client::execute()` is a one-shot RPC; `Runner` is a stateful loop with tools, prompt augmentation and per-run limits.
+- **Client vs Agent** — `Client::execute()` is a one-shot RPC; `Runner` is a stateful loop with tools and per-run limits.
 - **DTOs vs Factories** — typed DTOs (`Message`, `ToolCall`, `ToolDefinition`) plus factories that produce OpenAI-shaped arrays for both the provider wire and front-back transport. See [docs/07-history-serialization.md](07-history-serialization.md).
 
 ## See also

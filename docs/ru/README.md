@@ -9,7 +9,7 @@ LLM-дружелюбная карта `docs/`. Найди страницу по 
 | Установка, первый запрос, чтение ответа                                                         | [01-getting-started.md](01-getting-started.md)            |
 | Различия провайдеров (OpenAI / OpenRouter / Requesty), fallback, повторы, `supportedModels`      | [02-providers-and-fallback.md](02-providers-and-fallback.md) |
 | PSR-3 логирование (что пишется, пример Monolog, мост для Yii2)                                  | [03-logging.md](03-logging.md)                            |
-| Написать тулзу, `appendToSystemPromptAfterUse()`, `Property`, `Result`                          | [04-tools.md](04-tools.md)                                |
+| Написать тулзу, `firstUseHint()`, `Property`, `Result`                                          | [04-tools.md](04-tools.md)                                |
 | `AbstractToolbox`, `Runner::run()`, `Config`, лимиты, `log_message`                             | [05-toolbox-and-runner.md](05-toolbox-and-runner.md)      |
 | Стриминг событий `assistant_message` / `tool_call` / `tool_result`                              | [06-events.md](06-events.md)                              |
 | Сериализация истории сообщений для транспорта фронт ↔ бэк                                       | [07-history-serialization.md](07-history-serialization.md) |

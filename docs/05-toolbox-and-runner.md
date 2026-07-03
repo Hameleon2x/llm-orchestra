@@ -54,7 +54,7 @@ public function run(
 |-------------------|--------------------------------------------------------------------------------------------------------------------|
 | `$messages`       | `Message[]` without a `system` entry. The runner builds the system message every turn via `$systemPromptFn`.       |
 | `$toolbox`        | Any `ToolboxInterface`. Definitions are read once; `execute()` is called per tool call.                            |
-| `$systemPromptFn` | Called every turn with the current history. Return the base system prompt — `SystemPromptComposer` augments it.    |
+| `$systemPromptFn` | Called every turn with the current history. Return the system prompt — it is used as-is (no per-tool augmentation). |
 | `$config`         | `Agent\Dto\Config` — limits, generation overrides, fallback texts (below).                                          |
 | `$emit`           | Optional event sink — see [06-events.md](06-events.md).                                                             |
 
@@ -92,16 +92,9 @@ public function run(
 
 Hitting `maxTurns` or `maxToolCalls` produces `success = true` with one of the configured fallback texts as `$content` — it's not an error, the run completed gracefully. Inspect `$turnsUsed` / `$toolCallsUsed` to detect saturation.
 
-## How the system prompt grows: `SystemPromptComposer`
+## Tool notes: first-use hints in the result
 
-Every turn the runner calls `$systemPromptFn($messages)` to get the base prompt, then hands it to `Agent\SystemPromptComposer::compose()`. The composer:
-
-1. Scans `$messages` for assistant turns that carried `tool_calls`.
-2. Collects unique tool names used (sorted alphabetically).
-3. Calls `$toolbox->systemPromptAddition($name)`, which delegates to `ToolInterface::appendToSystemPromptAfterUse()`.
-4. Appends non-empty notes under the header `"Дополнительные пояснения по уже использованным инструментам:"` (Russian — change `SystemPromptComposer::TOOL_NOTES_HEADER` if you fork the package).
-
-Net effect: tools that were never called contribute nothing; tools that have been called add their output-schema notes from the next turn onward.
+Each turn the runner calls `$systemPromptFn($messages)` and uses the returned system prompt as-is — it is stable across turns. Tool notes are delivered differently: when `executeToolCalls` builds a tool's result message, it checks whether this is the **first** call of that tool in the history (`isFirstUse`). If so, it calls `$toolbox->firstUseHint($name)` and, when the text is non-empty, adds it to the result JSON under `$toolbox->firstUseHintKey($name)` (default `hint_use`). The note rides along with the tool's own output, once per dialogue, appended to the tail of the history — the request prefix stays byte-stable so the provider's prompt cache keeps hitting.
 
 ## When limits run out
 

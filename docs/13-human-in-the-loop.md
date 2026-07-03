@@ -50,7 +50,7 @@ if ($result->suspended) {
 
 There is no helper to "inject the answer" — the primitive is `Message::tool($toolCallId, $content)`, the same `tool` message the `Runner` writes for ordinary tools. To resume:
 
-1. For **each** pending id, append a `Message::tool($pendingId, $answer)` to the persisted history. `$answer` is whatever the external input produced, serialised however your tool's `appendToSystemPromptAfterUse()` documents (e.g. `{"answer":"..."}`).
+1. For **each** pending id, append a `Message::tool($pendingId, $answer)` to the persisted history. `$answer` is whatever the external input produced, serialised however your tool's `firstUseHint()` documents (e.g. `{"answer":"..."}`).
 2. Call `run()` again with that history. The model sees the answers as the tools' results and continues — exactly as if the tools had returned them synchronously.
 
 ```php
@@ -111,7 +111,7 @@ final class AskUserTool extends AbstractTool
             . 'Call it alone — not together with tools whose effect depends on the answer.';
     }
 
-    public function appendToSystemPromptAfterUse(): string
+    public function firstUseHint(): string
     {
         return 'ask_user resolves to {"answer": "..."} — the option the user picked (or free text). '
             . 'Continue from that answer.';

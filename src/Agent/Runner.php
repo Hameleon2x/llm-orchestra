@@ -36,12 +36,10 @@ use Hameleon2x\Llm\Factory\ToolCallFactory;
 class Runner
 {
     private Client $llm;
-    private SystemPromptComposer $promptComposer;
 
     public function __construct(Client $llm)
     {
         $this->llm = $llm;
-        $this->promptComposer = new SystemPromptComposer();
     }
 
     /**
@@ -88,9 +86,10 @@ class Runner
             $turnsUsed = $turn + 1;
             $toolCallsUsed = $config->maxToolCalls - $toolCallsLeft;
 
-            // Системный промт перестраивается каждый оборот: в него попадают пояснения
-            // по тулзам, которые уже вызывались в истории.
-            $systemPrompt = $this->buildSystemPrompt($systemPromptFn, $messages, $toolbox);
+            // Системный промт неизменен между оборотами — берём базовый as-is. Пояснения по
+            // тулзам подмешиваются в результат тулзы при первом вызове (см. executeToolCalls):
+            // системный префикс запроса стабилен, prompt-кеш провайдера переиспользуется.
+            $systemPrompt = (string)$systemPromptFn($messages);
 
             $request = $this->buildRequest($systemPrompt, $messages, $tools, $config);
             $resp = $this->llm->execute($request);
@@ -148,7 +147,7 @@ class Runner
             }
 
             if ($outcome['limitExhausted']) {
-                return $this->finishOnToolLimit($messages, $systemPromptFn, $toolbox, $config, $turnsUsed, $usage);
+                return $this->finishOnToolLimit($messages, $systemPromptFn, $config, $turnsUsed, $usage);
             }
         }
 
@@ -160,17 +159,6 @@ class Runner
             $config->maxToolCalls - $toolCallsLeft,
             $usage
         );
-    }
-
-    /**
-     * Базовый промт + аугментация описаниями уже вызванных тулз.
-     *
-     * @param Message[] $messages
-     */
-    private function buildSystemPrompt(callable $systemPromptFn, array $messages, ToolboxInterface $toolbox): string
-    {
-        $basePrompt = (string)$systemPromptFn($messages);
-        return $this->promptComposer->compose($basePrompt, $messages, $toolbox);
     }
 
     /**
@@ -196,7 +184,6 @@ class Runner
     private function finishOnToolLimit(
         array            $messages,
         callable         $systemPromptFn,
-        ToolboxInterface $toolbox,
         Config           $config,
         int              $turnsUsed,
         Usage            $usage
@@ -205,7 +192,7 @@ class Runner
 
         $messages[] = Message::user($config->limitNudgeMessage);
 
-        $systemPrompt = $this->buildSystemPrompt($systemPromptFn, $messages, $toolbox);
+        $systemPrompt = (string)$systemPromptFn($messages);
         $messagesWithSystem = array_merge([Message::system($systemPrompt)], $messages);
 
         $request = Request::messages($messagesWithSystem);
@@ -298,7 +285,20 @@ class Runner
                 continue;
             }
 
-            $content = json_encode($result->toJsonArray(), JSON_UNESCAPED_UNICODE);
+            $resultArray = $result->toJsonArray();
+
+            // Первый вызов этой тулзы в истории → кладём в её результат пояснение (как читать поля
+            // ответа) под ключом firstUseHintKey(). В хвост истории (append-only), один раз за
+            // диалог: системный префикс запроса стабилен, prompt-кеш провайдера переиспользуется.
+            // Только если пояснение непустое.
+            if ($this->isFirstUse($toolName, $toolCall->id, $messages)) {
+                $hint = trim($toolbox->firstUseHint($toolName));
+                if ($hint !== '') {
+                    $resultArray[$toolbox->firstUseHintKey($toolName)] = $hint;
+                }
+            }
+
+            $content = json_encode($resultArray, JSON_UNESCAPED_UNICODE);
 
             $emit(Event::TOOL_RESULT, $content, [
                 'tool_call_id' => $toolCall->id,
@@ -310,6 +310,35 @@ class Runner
         }
 
         return ['suspendedIds' => $suspendedIds, 'limitExhausted' => $limitExhausted];
+    }
+
+    /**
+     * Первый ли это вызов тулзы $toolName в истории. Первым считается самое раннее по порядку
+     * вхождение имени тулзы в assistant-ходах: если его id совпадает с текущим вызовом — это
+     * первый вызов. Так пояснение (firstUseHint) подмешивается ровно один раз за диалог, включая
+     * случай нескольких одноимённых вызовов в одном ходе — пояснение получит только первый.
+     *
+     * По имени, а не по факту записи пояснения: на возобновлении/повторе тулза уже отвечена и не
+     * переисполняется, а новый вызов того же имени найдёт более раннее вхождение и хинт не получит.
+     *
+     * @param Message[] $messages история с уже дописанным assistant-ходом текущего вызова
+     */
+    private function isFirstUse(string $toolName, string $currentCallId, array $messages): bool
+    {
+        foreach ($messages as $message) {
+            if ($message->role !== Role::ASSISTANT || empty($message->toolCalls)) {
+                continue;
+            }
+            foreach ($message->toolCalls as $raw) {
+                if (!is_array($raw)) {
+                    continue;
+                }
+                if (($raw['function']['name'] ?? null) === $toolName) {
+                    return ($raw['id'] ?? null) === $currentCallId;
+                }
+            }
+        }
+        return true;
     }
 
     /**

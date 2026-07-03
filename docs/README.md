@@ -9,7 +9,7 @@ LLM-friendly map of `docs/`. Find the page that matches your symptom.
 | Install, send first request, read the answer                                                | [01-getting-started.md](01-getting-started.md)                |
 | Provider differences (OpenAI / OpenRouter / Requesty), fallback, retries, `supportedModels` | [02-providers-and-fallback.md](02-providers-and-fallback.md)  |
 | PSR-3 logging (what's logged, Monolog example, Yii2 bridge)                                 | [03-logging.md](03-logging.md)                                |
-| Write a tool, `appendToSystemPromptAfterUse()`, `Property`, `Result`                        | [04-tools.md](04-tools.md)                                    |
+| Write a tool, `firstUseHint()`, `Property`, `Result`                                        | [04-tools.md](04-tools.md)                                    |
 | `AbstractToolbox`, `Runner::run()`, `Config`, limits, `log_message`                         | [05-toolbox-and-runner.md](05-toolbox-and-runner.md)          |
 | Stream `assistant_message` / `tool_call` / `tool_result` events                             | [06-events.md](06-events.md)                                  |
 | Serialize message history for front ↔ back transport                                        | [07-history-serialization.md](07-history-serialization.md)    |

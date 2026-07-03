@@ -16,20 +16,21 @@ Write one when the model needs something outside its training data: a DB read, a
 |---------------------------------------|------------------|---------------------------------------------------------------------------------------------------------------|
 | `getName()`                           | `string`         | Function name sent to the model (e.g. `get_weather`). Must match `[a-zA-Z0-9_-]`.                            |
 | `getDescription()`                    | `string`         | When/why the model should call this tool. In the `tools` list on every request.                              |
-| `appendToSystemPromptAfterUse()`      | `string`         | Notes appended to the **system** prompt only after the tool has been called at least once. Explains the *output* shape, not the input. `''` for none. |
+| `firstUseHint()`                      | `string`         | Note injected into the tool **result** (not the system prompt) under `firstUseHintKey()`, on the tool's first call in the dialogue. Explains the *output* shape, not the input. `''` for none (the default in `AbstractTool`). |
+| `firstUseHintKey()`                   | `string`         | Key the note is stored under in the result. Default `hint_use` (`AbstractTool::DEFAULT_FIRST_USE_HINT_KEY`); override if it collides with a result field. |
 | `getParameters()`                     | `Property[]`     | JSON Schema parameters, one `Property` per argument.                                                          |
 | `execute(array $args)`                | `Tool\Dto\Result`| Run the tool; `$args` is the decoded JSON the model sent.                                                     |
 | `shouldDisplay(array $args)`          | `bool`           | UI hint: should the chat surface this call (widget, preview)? Independent of execution.                       |
 
 ### `AbstractTool`
 
-`Hameleon2x\Llm\Tool\AbstractTool` is a thin base that supplies one default: `shouldDisplay(): bool = false`. Everything else you implement yourself.
+`Hameleon2x\Llm\Tool\AbstractTool` is a thin base that supplies defaults for `shouldDisplay(): bool = false`, `firstUseHint(): string = ''` and `firstUseHintKey(): string = 'hint_use'`. Everything else you implement yourself.
 
-### Why `appendToSystemPromptAfterUse()`, not `getDescription()`?
+### Why `firstUseHint()`, not `getDescription()`?
 
 `getDescription()` is in the `tools` array on every request and biases the model toward the tool ("use me"). Keep it short and call-focused.
 
-`appendToSystemPromptAfterUse()` is appended to the **system** prompt only on turns where the tool has already appeared in the dialog history (driven by `Agent\SystemPromptComposer`). Use it to remind the model how to read its own output — `temperatureC` is in Celsius, an empty `results` array means "nothing found", `status: closed` means the case is sealed — so subsequent turns reason about the result correctly without spending tokens on every turn beforehand.
+`firstUseHint()` is injected into the tool's **result** — under the key `firstUseHintKey()` (default `hint_use`) — on the **first** call of that tool in the dialogue, by `Agent\Runner`. Use it to remind the model how to read the tool's own output — `temperatureC` is in Celsius, an empty `results` array means "nothing found", `status: closed` means the case is sealed — placed right next to the data it describes. It lands in the result, not the system prompt, so the system prompt stays a stable prefix and the provider's prompt cache isn't invalidated every turn. Returns `''` (the default in `AbstractTool`) when there is nothing to add; then no key is added to the result.
 
 ## `Property`
 
@@ -84,7 +85,7 @@ final class GetWeatherTool extends AbstractTool
             . 'temperature, or conditions for a named place.';
     }
 
-    public function appendToSystemPromptAfterUse(): string
+    public function firstUseHint(): string
     {
         return 'get_weather returns {city: string, temperatureC: number, condition: string}. '
             . '`condition` is one of: clear, cloudy, rain, snow, storm. `temperatureC` is in Celsius.';
@@ -115,7 +116,7 @@ What each method does in context:
 
 - `getName()` — wired into OpenAI `function.name`. Don't change casually; dialog history references it.
 - `getDescription()` — top-line "what and when". Mention the trigger explicitly so the model picks the tool on the right turns.
-- `appendToSystemPromptAfterUse()` — output schema and edge cases. Lives in the system prompt from the first use onward.
+- `firstUseHint()` — output schema and edge cases. Injected into the tool result on first use, under `firstUseHintKey()` (default `hint_use`).
 - `getParameters()` — inputs. Mark genuinely required parameters as `required = true`; the model uses this to decide whether it has enough info.
 - `execute()` — validate `$args` defensively (the model can hallucinate). Return `Result::error(...)` on any failure — the error message goes back into the dialog and the model can recover.
 - `shouldDisplay()` — UI hint only; orthogonal to execution.

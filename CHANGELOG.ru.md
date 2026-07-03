@@ -7,6 +7,23 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-03
+
+Пояснения по тулзам переехали из системного промта в результат тулзы — ради prompt-кеша провайдера. Ломающий релиз: переименованы методы `ToolInterface`/`ToolboxInterface`, удалён `SystemPromptComposer`. Миграция — [UPGRADING.ru.md](UPGRADING.ru.md).
+
+### Изменено
+
+- **Пояснение по тулзе (`firstUseHint`) подмешивается в её РЕЗУЛЬТАТ при первом вызове, а не в системный промт.** Раньше `Agent\SystemPromptComposer` дописывал в system-промт блок пояснений по всем уже вызванным тулзам и пересобирал промт каждый оборот — мутирующий системный префикс сбрасывал prompt-кеш провайдера (OpenAI/Grok/DeepSeek/Gemini и др. кешируют по префиксу) на всей истории запроса. Теперь системный промт неизменен между оборотами, а `Runner` при ПЕРВОМ вызове тулзы в диалоге кладёт её пояснение прямо в JSON-результат под ключом `firstUseHintKey()`. История append-only, префикс запроса стабилен — кеш переиспользуется.
+  - `ToolInterface::appendToSystemPromptAfterUse()` → `ToolInterface::firstUseHint()` — текст тот же, изменилось только КУДА он попадает.
+  - Новый `ToolInterface::firstUseHintKey(): string` — имя ключа пояснения в результате. Дефолт `AbstractTool::DEFAULT_FIRST_USE_HINT_KEY` (`'hint_use'`), переопределяется в тулзе.
+  - `AbstractTool` даёт дефолты `firstUseHint() => ''` и `firstUseHintKey() => 'hint_use'`: тулзе без пояснения реализовывать ничего не нужно (раньше `appendToSystemPromptAfterUse()` был обязателен).
+  - `ToolboxInterface::systemPromptAddition($name)` → `ToolboxInterface::firstUseHint($name)`; добавлен `firstUseHintKey($name)`.
+  - Пояснение подмешивается только если непустое; при нескольких одноимённых вызовах в одном ходе — только в первый; на возобновлении/повторе прогона не дублируется (первенство — по самому раннему вхождению имени тулзы в историю).
+
+### Удалено
+
+- `Agent\SystemPromptComposer` и его `TOOL_NOTES_HEADER` — системный промт больше не аугментируется по тулзам, `$systemPromptFn` используется as-is.
+
 ## [0.2.5] - 2026-06-23
 
 ### Добавлено

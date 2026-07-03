@@ -7,6 +7,23 @@ All notable changes to `hameleon2x/llm-orchestra` are documented here. Format: [
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-03
+
+Tool notes moved out of the system prompt into the tool result — to preserve the provider's prompt cache. Breaking release: `ToolInterface`/`ToolboxInterface` methods renamed, `SystemPromptComposer` removed. Migration: [UPGRADING.md](UPGRADING.md).
+
+### Changed
+
+- **A tool's note (`firstUseHint`) is injected into its RESULT on first use, not into the system prompt.** Previously `Agent\SystemPromptComposer` appended a notes block for every already-called tool to the system prompt and rebuilt the prompt every turn — the mutating system prefix invalidated the provider's prompt cache (OpenAI/Grok/DeepSeek/Gemini et al. cache by prefix) across the whole request history. Now the system prompt is stable across turns, and on the FIRST call of a tool in the dialogue the `Runner` puts its note directly into the JSON result under `firstUseHintKey()`. History is append-only, the request prefix is stable — the cache is reused.
+  - `ToolInterface::appendToSystemPromptAfterUse()` → `ToolInterface::firstUseHint()` — same text, only WHERE it lands changed.
+  - New `ToolInterface::firstUseHintKey(): string` — the key the note is stored under in the result. Defaults to `AbstractTool::DEFAULT_FIRST_USE_HINT_KEY` (`'hint_use'`), overridable per tool.
+  - `AbstractTool` now defaults `firstUseHint() => ''` and `firstUseHintKey() => 'hint_use'`: a tool with no note implements nothing (`appendToSystemPromptAfterUse()` used to be mandatory).
+  - `ToolboxInterface::systemPromptAddition($name)` → `ToolboxInterface::firstUseHint($name)`; added `firstUseHintKey($name)`.
+  - The note is injected only when non-empty; with several same-named calls in one turn only the first gets it; it is not duplicated on resume/retry (first-use is decided by the earliest occurrence of the tool name in history).
+
+### Removed
+
+- `Agent\SystemPromptComposer` and its `TOOL_NOTES_HEADER` — the system prompt is no longer augmented per tool; `$systemPromptFn` is used as-is.
+
 ## [0.2.5] - 2026-06-23
 
 ### Added

@@ -23,8 +23,13 @@ interface ToolboxInterface
     public function execute(string $name, array $args): Result;
 
     /**
-     * Дополнение к системному промту по уже вызванной тулзе: текст, который Runner
-     * добавит в промт на следующих оборотах цикла. Пустая строка — без дополнения.
+     * Пояснение к результату тулзы, которое Runner подмешивает в её ответ при ПЕРВОМ вызове
+     * в диалоге (под ключом firstUseHintKey()). Пустая строка — без пояснения.
      */
-    public function systemPromptAddition(string $name): string;
+    public function firstUseHint(string $name): string;
+
+    /**
+     * Имя ключа, под которым firstUseHint($name) кладётся в результат первого вызова тулзы.
+     */
+    public function firstUseHintKey(string $name): string;
 }
