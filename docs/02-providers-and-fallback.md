@@ -27,7 +27,7 @@ Each entry in `$client->providers` is either a `ProviderInterface` instance or a
 | `model`           | string         | required                             | Default model for this provider.                                       |
 | `baseUrl`         | ?string        | provider-specific                    | Override upstream URL (proxies, self-hosted gateways).                 |
 | `temperature`     | ?float         | `Client::$defaultTemperature` (0.7)  | Generation temperature.                                                |
-| `topP`            | ?float         | `Client::$defaultTopP` (0.95)        | Top-p sampling.                                                        |
+| `topP`            | ?float         | `Client::$defaultTopP` (`null`)      | Top-p sampling. When unset, `top_p` is not sent — some providers (e.g. Anthropic) reject it together with `temperature`. |
 | `maxTokens`       | ?int           | `Client::$defaultMaxTokens` (1024)   | Response token cap.                                                    |
 | `retryAttempts`   | int            | 3                                    | How many times to retry retryable errors.                              |
 | `timeout`         | int            | 30                                   | HTTP timeout (seconds).                                                |

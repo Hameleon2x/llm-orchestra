@@ -27,7 +27,7 @@
 | `model`           | string         | обязательно                          | Дефолтная модель для этого провайдера.                                 |
 | `baseUrl`         | ?string        | специфично для провайдера            | Переопределить upstream URL (прокси, self-hosted шлюзы).               |
 | `temperature`     | ?float         | `Client::$defaultTemperature` (0.7)  | Температура генерации.                                                 |
-| `topP`            | ?float         | `Client::$defaultTopP` (0.95)        | Top-p сэмплинг.                                                        |
+| `topP`            | ?float         | `Client::$defaultTopP` (`null`)      | Top-p сэмплинг. Если не задан, `top_p` не отправляется — часть провайдеров (напр. Anthropic) не принимает его вместе с `temperature`. |
 | `maxTokens`       | ?int           | `Client::$defaultMaxTokens` (1024)   | Лимит токенов ответа.                                                  |
 | `retryAttempts`   | int            | 3                                    | Сколько раз повторять для retryable-ошибок.                            |
 | `timeout`         | int            | 30                                   | HTTP-таймаут (секунды).                                                |

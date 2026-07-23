@@ -76,9 +76,15 @@ class OpenAiProvider extends BaseProvider
             'model'       => $this->getModel($request),
             'messages'    => $this->prepareMessages($request),
             'temperature' => $this->getTemperature($request),
-            'top_p'       => $this->getTopP($request),
             'max_tokens'  => $this->getMaxTokens($request),
         ];
+
+        // top_p отправляем только если задан явно (в Request или в конфиге провайдера): часть
+        // провайдеров (напр. Anthropic) не принимает temperature и top_p одновременно. По умолчанию
+        // Client::$defaultTopP = null → top_p не уходит, семплированием управляет temperature.
+        if ($request->topP !== null || $this->topP !== null) {
+            $params['top_p'] = $this->getTopP($request);
+        }
 
         if (!empty($request->tools)) {
             $params['tools'] = $this->prepareTools($request);

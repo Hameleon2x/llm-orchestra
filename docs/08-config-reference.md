@@ -58,7 +58,7 @@ If `maxTurns` is reached without a terminating answer, `Runner` returns a succes
 
 ## `temperature` and `maxTokens`
 
-Both are optional overrides. If left `null`, the provider falls back to its constructor argument, and then to `Client::$defaultTemperature` / `Client::$defaultMaxTokens`. `topP` cannot be overridden per run — set it on the client or provider.
+Both are optional overrides. If left `null`, the provider falls back to its constructor argument, and then to `Client::$defaultTemperature` / `Client::$defaultMaxTokens`. `topP` cannot be overridden per run — set it on the client or provider. By default `Client::$defaultTopP` is `null`, so `top_p` is not sent at all unless a client or provider sets it explicitly (some providers, e.g. Anthropic, reject `top_p` together with `temperature`).
 
 ## `toolChoice`
 

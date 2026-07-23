@@ -61,9 +61,11 @@ class Client
     public float $defaultTemperature = 0.7;
 
     /**
-     * @var float TopP по умолчанию
+     * @var float|null TopP по умолчанию. null — top_p не отправляется, если не задан явно (в конфиге
+     * провайдера, Request или Config): часть провайдеров (напр. Anthropic) не принимает temperature и
+     * top_p одновременно. Управление семплированием по умолчанию — через temperature.
      */
-    public float $defaultTopP = 0.95;
+    public ?float $defaultTopP = null;
 
     /**
      * @var int Максимальное количество токенов по умолчанию
