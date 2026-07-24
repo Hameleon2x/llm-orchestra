@@ -1,8 +1,35 @@
 **Язык:** [English](../08-config-reference.md) · **Русский**
 
-# Справочник по конфигу прогона
+# Справочник по опциям прогона
 
-Полный разбор [`Agent\Dto\Config`](../../src/Agent/Dto/Config.php) — параметров одного вызова `Runner::run()`. Настройки самих моделей живут в каталоге, см. [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
+Полный разбор [`Agent\Dto\RunOptions`](../../src/Agent/Dto/RunOptions.php) — параметров одного вызова `Runner::run()`. Настройки самих моделей живут в каталоге, см. [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
+
+## Откуда берутся значения
+
+Опции — аргумент вызова, а не конфигурация приложения: объект создаётся на каждый прогон и живёт столько же. Значения по умолчанию для всех прогонов задаются секцией `defaultRun` каталога:
+
+```php
+$registry = Registry::fromArray([
+    'providers' => [...],
+    'models'    => [...],
+    'defaultRun' => [
+        'maxTurns'        => 40,
+        'maxToolCalls'    => 30,
+        'deadlineSeconds' => 600,
+        'params'          => ['temperature' => 0.2, 'maxTokens' => 8000],
+    ],
+]);
+```
+
+```php
+$options = $registry->runOptions();          // дефолты каталога уже внутри
+$options->model = $modelKey;                 // остаётся то, что зависит от запуска
+$options->extraParams = ['session_id' => $runId];
+
+$result = (new Runner($orchestra))->run($messages, $toolbox, $systemPromptFn, $options);
+```
+
+Каждый вызов `runOptions()` отдаёт новый объект: опции принадлежат прогону, делить их между прогонами нельзя. Неизвестный ключ в `defaultRun` — ошибка сборки каталога, а не молчаливый пропуск. `new RunOptions()` тоже работает — тогда все значения берутся из дефолтов класса.
 
 ## Поля
 
@@ -18,7 +45,7 @@
 
 - **`maxTurns`** (`int`, `40`) — сколько раз можно обратиться к модели. Один оборот — один запрос.
 - **`maxToolCalls`** (`int`, `30`) — сколько инструментов можно исполнить за весь прогон, а не за оборот.
-- **`deadlineSeconds`** (`?float`, `null`) — предельная длительность прогона в секундах. `null` — берётся `defaultDeadlineSeconds` каталога; если не задан и он, срока нет.
+- **`deadlineSeconds`** (`?float`, `null`) — предельная длительность прогона в секундах. `null` — без срока.
 
 **Что уходит в запрос**
 
@@ -44,12 +71,12 @@
 ```php
 use Hameleon2x\Llm\Agent\Dto\RunOptions;
 
-$config = new RunOptions();
-$config->model = 'glm-4.6';
-$config->maxTurns = 16;
-$config->maxToolCalls = 12;
-$config->params->temperature = 0.2;
-$config->params->maxTokens = 8000;
+$options = new RunOptions();
+$options->model = 'glm-4.6';
+$options->maxTurns = 16;
+$options->maxToolCalls = 12;
+$options->params->temperature = 0.2;
+$options->params->maxTokens = 8000;
 ```
 
 ## `model` и переключение
@@ -72,7 +99,7 @@ $config->params->maxTokens = 8000;
 Счётчик уменьшается на каждом исполненном вызове по всем оборотам. Когда он обнуляется посреди хода:
 
 1. Оставшиеся вызовы этого хода закрываются ошибкой — история остаётся валидной (у каждого вызова есть ответ).
-2. В историю добавляется `Message::user($config->limitNudgeMessage)`.
+2. В историю добавляется `Message::user($options->limitNudgeMessage)`.
 3. Делается ещё один запрос **без** инструментов.
 4. Непустой ответ отдаётся как успех. Ход без текста, но с вызовами инструментов даёт `limitFallbackText`; полностью пустой ход — ошибку `empty_response`.
 
@@ -89,7 +116,7 @@ $config->params->maxTokens = 8000;
 `params` перекрывает параметры модели и каталога (слияние по явности), а `unsupported` модели вырезает то, что она не принимает, поверх всего. `extraParams` сливается с полями провайдера и модели и уходит в **каждый** запрос прогона, включая добивку по лимиту:
 
 ```php
-$config->extraParams = [
+$options->extraParams = [
     'session_id' => 'agent_42_run_17',   // группировка прогона в observability провайдера
 ];
 ```
@@ -99,7 +126,7 @@ $config->extraParams = [
 Плагины OpenRouter — частный случай дополнительных полей:
 
 ```php
-$config->extraParams['plugins'] = [
+$options->extraParams['plugins'] = [
     ['id' => 'web', 'max_results' => 5],
 ];
 ```
@@ -109,10 +136,10 @@ $config->extraParams['plugins'] = [
 Передаётся в OpenAI-совместимый параметр `tool_choice` как есть.
 
 ```php
-$config->toolChoice = 'auto';     // решает модель
-$config->toolChoice = 'required'; // модель обязана вызвать инструмент
-$config->toolChoice = 'none';     // инструменты видны, но вызывать нельзя
-$config->toolChoice = ['type' => 'function', 'function' => ['name' => 'get_weather']];
+$options->toolChoice = 'auto';     // решает модель
+$options->toolChoice = 'required'; // модель обязана вызвать инструмент
+$options->toolChoice = 'none';     // инструменты видны, но вызывать нельзя
+$options->toolChoice = ['type' => 'function', 'function' => ['name' => 'get_weather']];
 ```
 
 ## `toolArgsGuard`
@@ -120,8 +147,8 @@ $config->toolChoice = ['type' => 'function', 'function' => ['name' => 'get_weath
 Проверяет аргументы перед исполнением инструмента и отклоняет вызов, если в значениях протекла разметка формата вызова. Включён по умолчанию: пропущенная утечка означает исполнение на неполных данных, а ложное срабатывание стоит одного переотправленного вызова.
 
 ```php
-$config->toolArgsGuard = ToolArgsGuard::default(['~<my_tag~']);  // плюс свои паттерны
-$config->toolArgsGuard = null;                                    // выключить
+$options->toolArgsGuard = ToolArgsGuard::default(['~<my_tag~']);  // плюс свои паттерны
+$options->toolArgsGuard = null;                                    // выключить
 ```
 
 ## Что возвращает прогон

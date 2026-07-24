@@ -2,6 +2,7 @@
 
 namespace Hameleon2x\Llm;
 
+use Hameleon2x\Llm\Agent\Dto\RunOptions;
 use Hameleon2x\Llm\Config\ErrorPolicy;
 use Hameleon2x\Llm\Config\GenerationParams;
 use Hameleon2x\Llm\Config\ModelDefinition;
@@ -55,13 +56,13 @@ final class Registry
     private ?float $maxTotalWaitSeconds = 600.0;
 
     /**
-     * Срок агентского прогона по умолчанию, секунды: сколько времени отводится циклу целиком, со
-     * всеми его оборотами. Берётся, когда прогон не задал свой `Config::$deadlineSeconds`.
+     * Значения по умолчанию для опций прогона: лимиты оборотов и вызовов, срок, параметры
+     * генерации, тексты. Разбираются в RunOptions по запросу — см. runOptions().
      *
-     * Живёт в каталоге, потому что зависит от установки, а не от задачи: в веб-воркере уместны
-     * минуты, в консольной команде — часы. null — без срока.
+     * Живут в каталоге, потому что зависят от установки, а не от задачи: в веб-воркере уместен
+     * срок в минутах, в консольной команде — в часах.
      */
-    private ?float $defaultDeadlineSeconds = null;
+    private array $defaultRun = [];
 
     private ?string $defaultModel = null;
 
@@ -75,7 +76,7 @@ final class Registry
      * Собрать каталог из конфигурации приложения.
      *
      * Ключи: providers, models, defaultModel, defaultParams, defaultPolicy, fallback, maxSwitches,
-     * maxTotalWaitSeconds, defaultDeadlineSeconds.
+     * maxTotalWaitSeconds, defaultRun.
      */
     public static function fromArray(array $config): self
     {
@@ -105,10 +106,11 @@ final class Registry
                 ? (float)$config['maxTotalWaitSeconds']
                 : null;
         }
-        if (array_key_exists('defaultDeadlineSeconds', $config)) {
-            $registry->defaultDeadlineSeconds = $config['defaultDeadlineSeconds'] !== null
-                ? (float)$config['defaultDeadlineSeconds']
-                : null;
+        if (isset($config['defaultRun']) && is_array($config['defaultRun'])) {
+            // Разбираем сразу, чтобы опечатка в ключе всплыла при сборке каталога, а не при первом
+            // прогоне: сам объект опций собирается заново на каждый запуск.
+            RunOptions::fromArray($config['defaultRun']);
+            $registry->defaultRun = $config['defaultRun'];
         }
         if (isset($config['defaultModel']) && $config['defaultModel'] !== '') {
             $registry->defaultModel = (string)$config['defaultModel'];
@@ -359,11 +361,20 @@ final class Registry
     }
 
     /**
-     * Срок агентского прогона по умолчанию, секунды. null — без срока.
+     * Опции прогона с дефолтами каталога — их остаётся поправить под конкретный запуск:
+     *
+     * ```php
+     * $options = $registry->runOptions();
+     * $options->model = $modelKey;
+     * $options->extraParams = ['session_id' => $runId];
+     * ```
+     *
+     * Каждый вызов отдаёт новый объект: опции принадлежат прогону, делить их между прогонами
+     * нельзя.
      */
-    public function defaultDeadlineSeconds(): ?float
+    public function runOptions(): RunOptions
     {
-        return $this->defaultDeadlineSeconds;
+        return RunOptions::fromArray($this->defaultRun);
     }
 
     /**

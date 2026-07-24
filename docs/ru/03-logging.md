@@ -15,7 +15,7 @@ use Hameleon2x\Llm\Registry;
 use Psr\Log\LoggerInterface;
 
 /** @var LoggerInterface $logger */
-$orchestra = new Orchestra(Registry::fromArray($config), $logger);
+$orchestra = new Orchestra(Registry::fromArray($options), $logger);
 ```
 
 ## Что именно логируется
@@ -68,7 +68,7 @@ use Monolog\Logger;
 $logger = new Logger('llm');
 $logger->pushHandler(new StreamHandler(__DIR__ . '/llm.log', Level::Warning));
 
-$orchestra = new Orchestra(Registry::fromArray($config), $logger);
+$orchestra = new Orchestra(Registry::fromArray($options), $logger);
 $response = $orchestra->execute(Request::simple('be brief', 'hi'));
 ```
 

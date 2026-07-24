@@ -79,13 +79,13 @@ if (!$response->isSuccess()) {
 ### 4. Агентский цикл
 
 ```php
-$config = new Config();
-$config->model = 'sonnet';                    // новое: модель прогона
-$config->params->temperature = 0.2;           // было: $config->temperature
-$config->params->maxTokens   = 8000;          // было: $config->maxTokens
-$config->extraParams = ['plugins' => [...]];  // было: $config->plugins
+$options = new RunOptions();
+$options->model = 'sonnet';                    // новое: модель прогона
+$options->params->temperature = 0.2;           // было: $options->temperature
+$options->params->maxTokens   = 8000;          // было: $options->maxTokens
+$options->extraParams = ['plugins' => [...]];  // было: $options->plugins
 
-$result = (new Runner($orchestra))->run($messages, $toolbox, $systemPromptFn, $config, $emit);
+$result = (new Runner($orchestra))->run($messages, $toolbox, $systemPromptFn, $options, $emit);
 
 if (!$result->success && $result->error !== null) {   // у приостановленного прогона error пуст
     echo $result->error->category;                    // было: строка $result->error
@@ -96,7 +96,7 @@ if (!$result->success && $result->error !== null) {   // у приостанов
 - Пустой ход модели больше не возвращается как успех с текстом «Нет ответа от модели.» — это ошибка категории `empty_response`. Проверки на этот текст удалите.
 - Причина остановки — `Result::$finish` (`Finish::COMPLETED`, `TOOL_LIMIT`, `TURNS_EXHAUSTED`, `DEADLINE`, `ERROR`, `SUSPENDED`).
 - Ручные циклы «повторить прогон при обрыве связи» уберите: повторы и переключение моделей делает `Orchestra`, а в интерфейс они приходят событиями `Event::ATTEMPT_FAILED` и `Event::MODEL_FALLBACK`.
-- Проверка аргументов инструментов включена по умолчанию (`Config::$toolArgsGuard`); свою такую же уберите.
+- Проверка аргументов инструментов включена по умолчанию (`RunOptions::$toolArgsGuard`); свою такую же уберите.
 
 ### 5. Свой провайдер
 
@@ -128,6 +128,8 @@ class MyProvider extends BaseProvider
 
 ### 6. Мелочи
 
+- `Agent\Dto\Config` теперь `Agent\Dto\RunOptions`: это аргумент вызова `Runner::run()`, а не конфигурация приложения. Значения по умолчанию для всех прогонов задаются секцией `defaultRun` каталога, а `Registry::runOptions()` отдаёт готовый объект.
+
 - `Agent\Dto\Usage` → `Dto\Usage`.
 - У вызова появился потолок времени по умолчанию: `maxTotalWaitSeconds` каталога равен 600 секундам. Если у вас есть модели, которые сами отвечают дольше десяти минут, поднимите его или снимите явным `null`.
 - `Response::$model` (слаг) теперь `$modelName`; появился `$modelKey` — ключ каталога, а `$provider` стал `$providerKey`.
@@ -135,7 +137,7 @@ class MyProvider extends BaseProvider
 - `Response::success()` и `Response::error()` удалены: ответ собирает провайдер, для сбоя есть `Response::failed(ErrorInfo)`.
 - `LlmException::isRetryable()` и `$retryable` удалены: `$e->info()->retryable`, категория — `$e->category()`.
 - Поля `Request::$temperature`, `$topP`, `$maxTokens`, `$seed` собраны в `$params` (`GenerationParams`); сеттеры остались. `setPlugins()` → `setExtraParams()`.
-- `Config::$maxTurns` по умолчанию 40 вместо 10: лимит оборотов должен срабатывать позже лимита вызовов инструментов, иначе прогон заканчивается служебной заглушкой вместо ответа модели.
+- `RunOptions::$maxTurns` по умолчанию 40 вместо 10: лимит оборотов должен срабатывать позже лимита вызовов инструментов, иначе прогон заканчивается служебной заглушкой вместо ответа модели.
 - `Agent\Dto\Result` создаётся только фабриками (`Result::success()`, `error()`, `suspended()`) — конструктор закрыт.
 - Свой HTTP-клиент подставляется конфигом провайдера (`'httpClient' => $client`), а его метод принимает заголовки и таймаут: `chat(array $payload, array $headers = [], ?int $timeout = null)`.
 - Отладочная константа `CurlChatClient::DEBUG` заменена на `'debug' => true` в конфиге провайдера (пишет в PSR-3).

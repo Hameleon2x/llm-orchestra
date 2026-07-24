@@ -114,13 +114,76 @@ test('потолок вызова по умолчанию конечный, яв
 });
 
 test('срок прогона по умолчанию не задан', static function (): void {
-    assertNull(catalogOf(new FakeChatClient())->defaultDeadlineSeconds());
-    assertSame(120.0, catalogOf(new FakeChatClient(), ['defaultDeadlineSeconds' => 120])->defaultDeadlineSeconds());
+    assertNull(catalogOf(new FakeChatClient())->runOptions()->deadlineSeconds);
+    assertSame(
+        120.0,
+        catalogOf(new FakeChatClient(), ['defaultRun' => ['deadlineSeconds' => 120]])->runOptions()->deadlineSeconds
+    );
 });
 
 test('число переключений по умолчанию — два', static function (): void {
     assertSame(2, catalogOf(new FakeChatClient())->maxSwitches());
     assertSame(0, catalogOf(new FakeChatClient(), ['maxSwitches' => 0])->maxSwitches());
+});
+
+suite('Каталог: опции прогона по умолчанию');
+
+test('runOptions() отдаёт опции с дефолтами из конфига', static function (): void {
+    $registry = catalogOf(new FakeChatClient(), [
+        'defaultRun' => [
+            'maxTurns'          => 120,
+            'maxToolCalls'      => 100,
+            'deadlineSeconds'   => 600,
+            'params'            => ['temperature' => 0.2, 'maxTokens' => 8000],
+            'turnsExhaustedText' => 'Не уложился в лимит шагов.',
+        ],
+    ]);
+
+    $options = $registry->runOptions();
+
+    assertSame(120, $options->maxTurns);
+    assertSame(100, $options->maxToolCalls);
+    assertSame(600.0, $options->deadlineSeconds);
+    assertSame(0.2, $options->params->temperature);
+    assertSame(8000, $options->params->maxTokens);
+    assertSame('Не уложился в лимит шагов.', $options->turnsExhaustedText);
+});
+
+test('незаданные ключи остаются дефолтами класса', static function (): void {
+    $options = catalogOf(new FakeChatClient(), ['defaultRun' => ['maxTurns' => 5]])->runOptions();
+
+    assertSame(5, $options->maxTurns);
+    assertSame(30, $options->maxToolCalls, 'дефолт класса');
+    assertTrue($options->stickyFallback);
+    assertNull($options->model);
+});
+
+test('каждый вызов отдаёт свой объект — опции не делятся между прогонами', static function (): void {
+    $registry = catalogOf(new FakeChatClient(), ['defaultRun' => ['maxTurns' => 10]]);
+
+    $first = $registry->runOptions();
+    $first->model = 'm';
+    $first->maxTurns = 99;
+
+    $second = $registry->runOptions();
+
+    assertNull($second->model);
+    assertSame(10, $second->maxTurns);
+});
+
+test('опечатка в ключе опций видна при сборке каталога', static function (): void {
+    $message = assertThrows(LlmConfigException::class, static fn() => catalogOf(new FakeChatClient(), [
+        'defaultRun' => ['maxTurn' => 10],
+    ]));
+
+    assertContains('maxTurn', $message);
+});
+
+test('проверку аргументов можно выключить конфигом', static function (): void {
+    $options = catalogOf(new FakeChatClient(), ['defaultRun' => ['toolArgsGuard' => false]])->runOptions();
+
+    assertNull($options->toolArgsGuard);
+    assertFalse(catalogOf(new FakeChatClient())->runOptions()->toolArgsGuard === null, 'по умолчанию включена');
 });
 
 suite('Каталог: слияние настроек вызова');

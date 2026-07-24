@@ -72,18 +72,18 @@ $orchestra = new Orchestra(Registry::fromArray([
 ]));
 
 // 4. Run settings.
-$config = new RunOptions();
-$config->model = 'mini';
-$config->maxTurns = 12;
-$config->maxToolCalls = 10;
-$config->params->temperature = 0.3;
+$options = new RunOptions();
+$options->model = 'mini';
+$options->maxTurns = 12;
+$options->maxToolCalls = 10;
+$options->params->temperature = 0.3;
 
 // 5. Run it.
 $result = (new Runner($orchestra))->run(
     [Message::user('What is the weather in Moscow right now?')],
     new WeatherToolbox(),
     static fn(): string => 'You answer weather questions concisely. Get facts from the tools.',
-    $config
+    $options
 );
 
 echo $result->success ? $result->content : 'Failure: ' . $result->error->category;
@@ -154,14 +154,14 @@ public function run(
     array            $messages,        // Message[] — history without the system message
     ToolboxInterface $toolbox,
     callable         $systemPromptFn,  // fn(Message[] $history): string
-    Config           $config,
+    Config           $options,
     ?callable        $emit = null      // fn(string $event, string $content, array $meta): void
 ): Result
 ```
 
 - **`$messages`** — the dialog history. The system message doesn't go here: the loop adds it itself.
 - **`$systemPromptFn`** — a function returning the system prompt. Called every turn and receives the current history, so the prompt can be built dynamically. The returned text goes to the model as-is.
-- **`$config`** — run settings: model, limits, generation parameters. Full breakdown — [08-config-reference.md](08-config-reference.md).
+- **`$options`** — run settings: model, limits, generation parameters. Full breakdown — [08-config-reference.md](08-config-reference.md).
 - **`$emit`** — an optional event sink: progress in the UI, logging the dialog to a database ([06-events.md](06-events.md)).
 
 ## Limits
@@ -178,13 +178,13 @@ What happens when they run out:
 
 Both cases are not an error but a normal completion within budget. `$finish` helps you tell them apart from a full answer.
 
-The third limiter is the deadline: `$config->deadlineSeconds`. It is checked before every turn, and on expiry the run returns an error of category `deadline` along with the full history: the tool results collected so far are not lost. The check sits at the start of a turn, and the remaining time is passed to the executor as the wait cap for the call — so retries and switches inside a turn are bounded too. Only finishing off unanswered calls on resume happens outside it.
+The third limiter is the deadline: `$options->deadlineSeconds`. It is checked before every turn, and on expiry the run returns an error of category `deadline` along with the full history: the tool results collected so far are not lost. The check sits at the start of a turn, and the remaining time is passed to the executor as the wait cap for the call — so retries and switches inside a turn are bounded too. Only finishing off unanswered calls on resume happens outside it.
 
 ## Hint on a tool's first call
 
 A tool can have a non-obvious response format — for example, fields `docId` and `sources[]` that the model must use in a specific way. Such an explanation shouldn't live in the system prompt: it's sent to the model on every request and costs tokens even when the tool isn't used.
 
-Instead, the loop mixes the explanation into the tool's result on its **first** call in the dialog: `$toolbox->firstUseHint($name)` is placed into the JSON response under the key `$toolbox->firstUseHintKey($name)` (default `hint_use`). Once per dialog, at the tail of the history — the start of the request stays unchanged, and the provider's prompt cache keeps working. The note goes in under its own key. A tool that answers with a list has nowhere to put that key, so on the first call its list is tucked under `Config::$firstUseResultKey` (`result` by default) with the note next to it: `{"hint_use": "…", "result": [...]}`. Later calls return a plain list again.
+Instead, the loop mixes the explanation into the tool's result on its **first** call in the dialog: `$toolbox->firstUseHint($name)` is placed into the JSON response under the key `$toolbox->firstUseHintKey($name)` (default `hint_use`). Once per dialog, at the tail of the history — the start of the request stays unchanged, and the provider's prompt cache keeps working. The note goes in under its own key. A tool that answers with a list has nowhere to put that key, so on the first call its list is tucked under `RunOptions::$firstUseResultKey` (`result` by default) with the note next to it: `{"hint_use": "…", "result": [...]}`. Later calls return a plain list again.
 
 ## See also
 

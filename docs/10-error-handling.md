@@ -41,7 +41,7 @@ if ($error->is(ErrorCategory::CONTEXT_LENGTH, ErrorCategory::BAD_REQUEST)) {
 The same applies to the agent loop:
 
 ```php
-$result = $runner->run($messages, $toolbox, $systemPromptFn, $config);
+$result = $runner->run($messages, $toolbox, $systemPromptFn, $options);
 
 if (!$result->success && $result->error !== null) {
     echo $result->error->category;

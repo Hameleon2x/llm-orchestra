@@ -29,7 +29,7 @@ public function execute(array $args): Result
 3. После хода, если хоть один вызов приостановлен, **останавливает цикл** и возвращает приостановленный `Agent\Dto\Result` вместо нового обращения к модели.
 
 ```php
-$result = $runner->run($history, $toolbox, $systemPromptFn, $config, $emit);
+$result = $runner->run($history, $toolbox, $systemPromptFn, $options, $emit);
 
 if ($result->suspended) {
     // $result->pendingToolCallIds — id вызовов, чьи результаты нужно предоставить для возобновления.
@@ -58,7 +58,7 @@ if (!allPendingAnswered($dialogId)) {
 }
 
 $history = loadHistory($dialogId); // Message[], завершается ассистентскими tool_calls + по tool-сообщению на каждый вызов
-$result  = $runner->run($history, $toolbox, $systemPromptFn, $config, $emit);
+$result  = $runner->run($history, $toolbox, $systemPromptFn, $options, $emit);
 // модель продолжает с ответов
 ```
 
@@ -81,7 +81,7 @@ $result  = $runner->run($history, $toolbox, $systemPromptFn, $config, $emit);
 Возобновление — это новый вызов `run()`, поэтому всё, что считается «за прогон», отсчитывается с нуля:
 
 - **срок прогона** (`deadlineSeconds`), **потолок вызова** (`maxTotalWaitSeconds` каталога) и **потолок модели** (`maxWaitSeconds` политики) — так и задумано: пауза ждёт человека и может длиться часами, засчитывать её в бюджет модели незачем;
-- **бюджет вызовов инструментов** (`maxToolCalls`) — диалог с тремя паузами может исполнить до трёх бюджетов подряд. Если нужен потолок на весь диалог, считайте его сами и передавайте остаток в `Config::$maxToolCalls`;
+- **бюджет вызовов инструментов** (`maxToolCalls`) — диалог с тремя паузами может исполнить до трёх бюджетов подряд. Если нужен потолок на весь диалог, считайте его сами и передавайте остаток в `RunOptions::$maxToolCalls`;
 - **счётчики результата**: `turnsUsed`, `toolCallsUsed`, `usage`, `attempts` относятся к текущему отрезку, а не ко всему диалогу. Суммируйте их на своей стороне, если показываете общую стоимость.
 
 Что переносится между отрезками — только история сообщений: она и есть состояние прогона.

@@ -20,27 +20,29 @@ The unit of choice is now the model, not the provider. Model catalog, one flat f
 - **Three layers of response data.** `Response::$metadata` is ours; `Response::extra()` holds provider data normalized to your names via the `capture` map; `Response::raw($path)` gives the whole payload with dot-path access such as `choices.0.message.reasoning_content`. A new provider field no longer requires a library release — one line in `capture` is enough. The built-in map covers `reasoning` (both spellings), `annotations`, `refusal`, `citations`, `systemFingerprint` and the upstream name.
 - **Three levels of arbitrary payload fields and headers:** provider → model → call. Associative arrays merge recursively, lists are replaced wholesale, `null` removes a key. That is how you enable extended thinking on one model, `reasoning_effort` on another and `HTTP-Referer` for a whole provider. `unsupported` strips a parameter the model rejects (`temperature` on reasoning models) no matter who set it.
 - **`Usage` extended:** `cachedTokens`, `reasoningTokens`, the provider's actual `cost` and a `byModel` breakdown — with fallback a single run may involve models with different pricing. Optional catalog `pricing` gives an estimate via `Registry::costOf()` when the provider reports no cost.
-- **Application callbacks are isolated.** An exception from the event sink (`$emit`) or the attempt observer (`withObserver()`) no longer aborts the run: it is logged (`LLM event sink failed`, `LLM attempt observer failed`). An exception from a tool closes that call with an error — the model sees it and moves on, while the details go to the log (`LLM tool threw an exception`). The exception message is not shown to the model by default: `Agent\Dto\Config::$exposeToolExceptions` opts in, trimmed to 300 characters.
+- **Application callbacks are isolated.** An exception from the event sink (`$emit`) or the attempt observer (`withObserver()`) no longer aborts the run: it is logged (`LLM event sink failed`, `LLM attempt observer failed`). An exception from a tool closes that call with an error — the model sees it and moves on, while the details go to the log (`LLM tool threw an exception`). The exception message is not shown to the model by default: `Agent\Dto\RunOptions::$exposeToolExceptions` opts in, trimmed to 300 characters.
 - **`Agent\Runner` takes a PSR-3 logger** as the second constructor argument.
 - **The API format belongs to the provider, not the transport.** The endpoint path comes from `BaseProvider::endpointPath()`, the `stream` field is set by `OpenAiProvider`, and `CurlChatClient` receives a ready URL as its first constructor argument. A provider with a different path no longer needs its own transport. A custom client factory also receives the ready URL as its second argument.
-- **The run deadline holds inside a turn.** `Config::$deadlineSeconds` is projected onto every executor call through `Orchestra::withTotalWaitSeconds()`, so retries and switches cannot carry the run past it.
+- **The run deadline holds inside a turn.** `RunOptions::$deadlineSeconds` is projected onto every executor call through `Orchestra::withTotalWaitSeconds()`, so retries and switches cannot carry the run past it.
 - **The time caps are now hard:** the request timeout is clamped by what is left of the call budget, so a request never outlives `maxTotalWaitSeconds` or the run deadline.
 - **Transport configuration errors** (a malformed URL, an unknown protocol, a certificate problem — cURL 1/3/60/77, plus a redirect in reply to a POST) now map to category `config`: retrying them or switching models changes nothing.
 - **A PHP-level error** (`TypeError` and other `\Error`s) is no longer treated as a temporary failure: category `config`, no retries and no model switching.
 - **A typo in a config value no longer passes silently:** `then`, the categories in `retryOn`, `stopOn` and `perCategory`, and the names in `unsupported` are checked against the allowed sets while the catalog is built. Otherwise `'Stop'` instead of `'stop'` would quietly permit the very model switching it is meant to forbid, and a non-empty `retryOn` without a single real category would disable retries entirely.
 - **A failure in application code no longer costs you the history:** an exception from the system prompt or the tool registry comes back as a `Result` with category `config` instead of escaping; a failing `firstUseHint()` is only logged.
-- **`Tool\ToolArgsGuard`** — detects leaked tool-call markup in arguments (`<parameter name=…>`, `<invoke …>`, tags named after parameters). Enabled by default (`Agent\Dto\Config::$toolArgsGuard`), disabled by assigning `null`, extendable with your own patterns. A tool with corrupted arguments is not executed — the model gets an error and re-sends the call.
+- **`Tool\ToolArgsGuard`** — detects leaked tool-call markup in arguments (`<parameter name=…>`, `<invoke …>`, tags named after parameters). Enabled by default (`Agent\Dto\RunOptions::$toolArgsGuard`), disabled by assigning `null`, extendable with your own patterns. A tool with corrupted arguments is not executed — the model gets an error and re-sends the call.
 - **`Agent\Enum\Finish`** — why the run stopped (`completed`, `tool_limit`, `turns_exhausted`, `deadline`, `error`, `suspended`) in `Agent\Dto\Result::$finish`. Previously outcomes differed only by placeholder text.
-- **`Agent\Dto\Config::$deadlineSeconds`** — a wall-clock limit for the run; on expiry it returns a `deadline` error with the full history intact.
-- **The catalog's `defaultDeadlineSeconds`** — the default deadline for a run, used by the loop when the run does not set its own. A deadline describes the installation (web worker versus console command) rather than the task, so there is no need to repeat it in every calling service.
-- **The texts sent to the model are configurable:** `toolLimitReachedText`, `toolFailedText`, `toolFailedPrefix`, `encodeFailedText` and `firstUseResultKey` in `Agent\Dto\Config` — these strings used to be hard-coded in `Runner`.
+- **`Agent\Dto\RunOptions::$deadlineSeconds`** — a wall-clock limit for the run; on expiry it returns a `deadline` error with the full history intact.
+- **The catalog's `defaultRun` section and `Registry::runOptions()`** — defaults for run options (turn and tool-call limits, deadline, generation params, texts) are set in the config next to the models, and `runOptions()` returns a ready object to adjust for the specific run. No more repeating those numbers as constants in every calling service.
+- **The texts sent to the model are configurable:** `toolLimitReachedText`, `toolFailedText`, `toolFailedPrefix`, `encodeFailedText` and `firstUseResultKey` in `Agent\Dto\RunOptions` — these strings used to be hard-coded in `Runner`.
 - **`Event::ATTEMPT_FAILED` and `Event::MODEL_FALLBACK`** — a failed attempt (with "will retry" and the delay) and a model switch. The UI can show retries as they happen instead of reconstructing them afterwards.
 - **`Http\ChatClientInterface` accepts headers and a per-call timeout**, and a custom client is injected through the provider config (`httpClient` — an object or a factory) instead of subclassing the provider.
-- **`Agent\Dto\Config::$maxSwitches`** — the switch limit for a single run (previously only the catalog set it).
+- **`Agent\Dto\RunOptions::$maxSwitches`** — the switch limit for a single run (previously only the catalog set it).
 - **`Support\SleeperInterface`** — the pause between attempts, replaceable in tests and in web contexts.
 - **Debugging over PSR-3:** `'debug' => true` in the provider config logs the outgoing payload and the raw response at `debug` level (this used to be a constant inside `CurlChatClient`).
 
 ### Changed
+
+- **`Agent\Dto\Config` is renamed to `Agent\Dto\RunOptions`.** The old name was misleading: this is not application configuration but an argument of `Runner::run()` — the object lives for exactly one run.
 
 - **A call now has a default time cap:** the catalog `maxTotalWaitSeconds` is 600 seconds instead of "unlimited"; an explicit `null` removes it. Without a cap the default 120 s timeout, 2 retries and 2 switches stretched a single call to almost twenty minutes.
 
@@ -48,13 +50,13 @@ The unit of choice is now the model, not the provider. Model catalog, one flat f
 - **The error policy is set at three levels and never mixed between them.** A `policy` section exists on a model and on a provider, and the catalog defines `defaultPolicy`. The closest one applies — the model's, then its provider's, then the catalog's — and it applies in full: unset fields take `ErrorPolicy` defaults rather than values from a neighbouring level. So the config shows what governs a given call without working out what overrides what.
 - **An empty turn is an `empty_response` error, not a "success" with a placeholder.** The `Runner` used to return the text "Нет ответа от модели." and callers had to compare strings.
 - **Truncated tool-call arguments** (cut off by the token limit) are reported as `invalid_response` — the tool is not executed on partial data.
-- `Agent\Runner` runs on top of `Orchestra`; the run's model is a catalog key (`Config::$model`), and after a switch the run continues on the model that answered (`Config::$stickyFallback`).
+- `Agent\Runner` runs on top of `Orchestra`; the run's model is a catalog key (`RunOptions::$model`), and after a switch the run continues on the model that answered (`RunOptions::$stickyFallback`).
 - `Agent\Dto\Result` carries an `ErrorInfo` instead of an error string, plus the model key, the attempt log and the last `Response`.
 - Generation parameters live in `Config\GenerationParams` (`temperature`, `topP`, `maxTokens`, `seed`) and merge by explicitness: catalog → model → call.
 - `Usage` moved from `Agent\Dto` to `Dto` — it is useful without the agent loop.
 - `Event::ASSISTANT_MESSAGE` meta now carries `extra` (including the model's reasoning), the turn's `usage` and the model key.
 - **Two time caps instead of one.** `maxWaitSeconds` in the policy caps **a single model** (its requests and the pauses between retries) and restarts after a switch, while the new catalog key `maxTotalWaitSeconds` caps **the whole call**, switches included. Previously the single cap lived in the model's policy yet measured the entire run, so a slow starting model ate the backups' budget.
-- **`Config::$maxTurns` now defaults to `40`** (with `maxToolCalls = 30`). Turns must cover every allowed tool call, otherwise the run hits the turn limit and returns a service placeholder instead of the model's final answer.
+- **`RunOptions::$maxTurns` now defaults to `40`** (with `maxToolCalls = 30`). Turns must cover every allowed tool call, otherwise the run hits the turn limit and returns a service placeholder instead of the model's final answer.
 
 ### Removed
 
@@ -75,7 +77,7 @@ Tool notes moved out of the system prompt into the tool result — to preserve t
   - New `ToolInterface::firstUseHintKey(): string` — the key the note is stored under in the result. Defaults to `AbstractTool::DEFAULT_FIRST_USE_HINT_KEY` (`'hint_use'`), overridable per tool.
   - `AbstractTool` now defaults `firstUseHint() => ''` and `firstUseHintKey() => 'hint_use'`: a tool with no note implements nothing (`appendToSystemPromptAfterUse()` used to be mandatory).
   - `ToolboxInterface::systemPromptAddition($name)` → `ToolboxInterface::firstUseHint($name)`; added `firstUseHintKey($name)`.
-  - The note is injected only when non-empty; a list result is tucked under `Config::$firstUseResultKey` (`result` by default), since a list cannot take a key; with several same-named calls in one turn only the first gets it; it is not duplicated on resume/retry (first-use is decided by the earliest occurrence of the tool name in history).
+  - The note is injected only when non-empty; a list result is tucked under `RunOptions::$firstUseResultKey` (`result` by default), since a list cannot take a key; with several same-named calls in one turn only the first gets it; it is not duplicated on resume/retry (first-use is decided by the earliest occurrence of the tool name in history).
 
 ### Removed
 
@@ -97,7 +99,7 @@ Tool notes moved out of the system prompt into the tool result — to preserve t
 
 ### Added
 
-- `Agent\Dto\Config::$extraParams` — provider-specific payload fields propagated by `Agent\Runner` into every request of the run (both the main loop turns and the limit-finish nudge). Same merge semantics as `Request::$extraParams`: standard keys (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) always win. Typical use: `$config->extraParams = ['session_id' => 'agent_42_run_17']` to group every LLM call inside one agent run under one OpenRouter session.
+- `Agent\Dto\RunOptions::$extraParams` — provider-specific payload fields propagated by `Agent\Runner` into every request of the run (both the main loop turns and the limit-finish nudge). Same merge semantics as `Request::$extraParams`: standard keys (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) always win. Typical use: `$options->extraParams = ['session_id' => 'agent_42_run_17']` to group every LLM call inside one agent run under one OpenRouter session.
 
 ## [0.2.3] - 2026-05-27
 
@@ -143,7 +145,7 @@ Initial public release.
 - `Client` with priority-based provider fallback (instances or array configs).
 - Three providers for OpenAI-compatible Chat Completions APIs: `OpenAiProvider`, `OpenRouterProvider`, `RequestyProvider` (all extend `BaseProvider`).
 - Exponential-backoff retries (1s → 2s → 4s → ..., capped at 10s); retryable vs non-retryable via `LlmException::isRetryable()`.
-- `Agent\Runner` agent loop with caps on turns and tool calls (`Agent\Dto\Config`).
+- `Agent\Runner` agent loop with caps on turns and tool calls (`Agent\Dto\RunOptions`).
 - Tool-calling contract: `Tool\ToolInterface`, `Tool\AbstractTool`, `Tool\SchemaBuilder`, typed `Tool\Dto\Result` (`ok($data)` / `error($message)`).
 - `Agent\AbstractToolbox` with optional injected `log_message` parameter.
 - `Agent\SystemPromptComposer` — augments the system prompt with per-tool notes once a tool has been used.

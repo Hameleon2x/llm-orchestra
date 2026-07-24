@@ -40,7 +40,7 @@ use Hameleon2x\Llm\Factory\MessageFactory;
 
 /** @var Orchestra $orchestra */
 /** @var \Hameleon2x\Llm\Agent\ToolboxInterface $toolbox */
-/** @var \Hameleon2x\Llm\Agent\Dto\RunOptions $config */
+/** @var \Hameleon2x\Llm\Agent\Dto\RunOptions $options */
 
 // 1. Restore history sent from the frontend.
 $rawHistory = json_decode($_POST['history'] ?? '[]', true) ?: [];
@@ -51,7 +51,7 @@ $messages[] = Message::user($_POST['text']);
 
 // 3. Run the agent.
 $runner = new Runner($orchestra);
-$result = $runner->run($messages, $toolbox, fn() => 'You are a helpful assistant', $config);
+$result = $runner->run($messages, $toolbox, fn() => 'You are a helpful assistant', $options);
 
 // 4. Send the new history back.
 echo json_encode([

@@ -79,13 +79,13 @@ if (!$response->isSuccess()) {
 ### 4. Agent loop
 
 ```php
-$config = new Config();
-$config->model = 'sonnet';                    // new: the run's model
-$config->params->temperature = 0.2;           // was: $config->temperature
-$config->params->maxTokens   = 8000;          // was: $config->maxTokens
-$config->extraParams = ['plugins' => [...]];  // was: $config->plugins
+$options = new RunOptions();
+$options->model = 'sonnet';                    // new: the run's model
+$options->params->temperature = 0.2;           // was: $options->temperature
+$options->params->maxTokens   = 8000;          // was: $options->maxTokens
+$options->extraParams = ['plugins' => [...]];  // was: $options->plugins
 
-$result = (new Runner($orchestra))->run($messages, $toolbox, $systemPromptFn, $config, $emit);
+$result = (new Runner($orchestra))->run($messages, $toolbox, $systemPromptFn, $options, $emit);
 
 if (!$result->success && $result->error !== null) {   // a suspended run has no error
     echo $result->error->category;                    // was: the string $result->error
@@ -96,7 +96,7 @@ if (!$result->success && $result->error !== null) {   // a suspended run has no 
 - An empty turn is no longer a success carrying "Нет ответа от модели." — it is an `empty_response` error. Remove checks against that text.
 - The stop reason is `Result::$finish` (`Finish::COMPLETED`, `TOOL_LIMIT`, `TURNS_EXHAUSTED`, `DEADLINE`, `ERROR`, `SUSPENDED`).
 - Remove hand-written "retry the whole run on a dropped connection" loops: retries and model switches are `Orchestra`'s job, and they reach the UI as `Event::ATTEMPT_FAILED` and `Event::MODEL_FALLBACK`.
-- Tool-argument checking is on by default (`Config::$toolArgsGuard`); remove your own copy of it.
+- Tool-argument checking is on by default (`RunOptions::$toolArgsGuard`); remove your own copy of it.
 
 ### 5. Custom providers
 
@@ -128,6 +128,8 @@ class MyProvider extends BaseProvider
 
 ### 6. Smaller things
 
+- `Agent\Dto\Config` is now `Agent\Dto\RunOptions`: it is an argument of `Runner::run()`, not application configuration. Defaults for every run are set by the catalog's `defaultRun` section, and `Registry::runOptions()` hands out a ready object.
+
 - `Agent\Dto\Usage` → `Dto\Usage`.
 - A call now has a default time cap: the catalog `maxTotalWaitSeconds` is 600 seconds. If you have models that take more than ten minutes to answer, raise it or remove it with an explicit `null`.
 - `Response::$model` (the slug) is now `$modelName`; `$modelKey` holds the catalog key, and `$provider` became `$providerKey`.
@@ -135,7 +137,7 @@ class MyProvider extends BaseProvider
 - `Response::success()` and `Response::error()` are gone: the provider assembles the response, and a failure is `Response::failed(ErrorInfo)`.
 - `LlmException::isRetryable()` and `$retryable` are gone: use `$e->info()->retryable`, and `$e->category()` for the category.
 - `Request::$temperature`, `$topP`, `$maxTokens` and `$seed` are collected into `$params` (`GenerationParams`); the setters stayed. `setPlugins()` → `setExtraParams()`.
-- `Config::$maxTurns` now defaults to 40 instead of 10: the turn limit must fire later than the tool-call limit, otherwise a run ends with a placeholder instead of the model's answer.
+- `RunOptions::$maxTurns` now defaults to 40 instead of 10: the turn limit must fire later than the tool-call limit, otherwise a run ends with a placeholder instead of the model's answer.
 - `Agent\Dto\Result` is only built through its factories (`Result::success()`, `error()`, `suspended()`) — the constructor is closed.
 - A custom HTTP client is injected via the provider config (`'httpClient' => $client`), and its method takes headers and a timeout: `chat(array $payload, array $headers = [], ?int $timeout = null)`.
 - The `CurlChatClient::DEBUG` constant is replaced by `'debug' => true` in the provider config (logs through PSR-3).

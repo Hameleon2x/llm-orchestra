@@ -41,7 +41,7 @@ if ($error->is(ErrorCategory::CONTEXT_LENGTH, ErrorCategory::BAD_REQUEST)) {
 То же самое для агентского цикла:
 
 ```php
-$result = $runner->run($messages, $toolbox, $systemPromptFn, $config);
+$result = $runner->run($messages, $toolbox, $systemPromptFn, $options);
 
 if (!$result->success && $result->error !== null) {
     echo $result->error->category;

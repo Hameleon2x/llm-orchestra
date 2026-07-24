@@ -29,7 +29,7 @@ When a tool call returns `suspend()`, `Runner`:
 3. After the turn, if at least one call is suspended, **stops the loop** and returns a suspended `Agent\Dto\Result` instead of calling the model again.
 
 ```php
-$result = $runner->run($history, $toolbox, $systemPromptFn, $config, $emit);
+$result = $runner->run($history, $toolbox, $systemPromptFn, $options, $emit);
 
 if ($result->suspended) {
     // $result->pendingToolCallIds — ids of the calls whose results must be supplied to resume.
@@ -58,7 +58,7 @@ if (!allPendingAnswered($dialogId)) {
 }
 
 $history = loadHistory($dialogId); // Message[], ending with the assistant's tool_calls + one tool message per call
-$result  = $runner->run($history, $toolbox, $systemPromptFn, $config, $emit);
+$result  = $runner->run($history, $toolbox, $systemPromptFn, $options, $emit);
 // the model continues from the answers
 ```
 
@@ -81,7 +81,7 @@ A caveat for the interrupted/crash case: re-execution is **at-least-once**, so m
 Resuming is a fresh `run()` call, so everything counted "per run" starts from zero:
 
 - **the run deadline** (`deadlineSeconds`), **the call cap** (the catalog's `maxTotalWaitSeconds`) and **the model cap** (the policy's `maxWaitSeconds`) — by design: the pause waits for a human and may last hours, there is no point charging it to a model's budget;
-- **the tool call budget** (`maxToolCalls`) — a dialog with three pauses may spend three budgets in a row. If you need a cap for the whole dialog, track it yourself and pass what's left in `Config::$maxToolCalls`;
+- **the tool call budget** (`maxToolCalls`) — a dialog with three pauses may spend three budgets in a row. If you need a cap for the whole dialog, track it yourself and pass what's left in `RunOptions::$maxToolCalls`;
 - **the result counters**: `turnsUsed`, `toolCallsUsed`, `usage` and `attempts` describe the current segment, not the whole dialog. Sum them on your side if you show the total cost.
 
 The only thing carried between segments is the message history — it is the state of the run.

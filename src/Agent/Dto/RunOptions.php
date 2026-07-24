@@ -4,11 +4,17 @@ namespace Hameleon2x\Llm\Agent\Dto;
 
 use Hameleon2x\Llm\Config\ErrorPolicy;
 use Hameleon2x\Llm\Config\GenerationParams;
+use Hameleon2x\Llm\Exception\LlmConfigException;
 use Hameleon2x\Llm\Tool\ToolArgsGuard;
 
 /**
  * Параметры одного прогона Runner: какой моделью работать, докуда считать лимиты и что делать
  * с ошибками.
+ *
+ * Это аргумент вызова, а не конфигурация приложения: объект создаётся на каждый прогон и живёт
+ * ровно столько же. Значения по умолчанию для всех прогонов задаются секцией `defaultRun`
+ * каталога — `Registry::runOptions()` отдаёт готовый объект, который остаётся поправить под
+ * конкретный запуск.
  *
  * Модель задаётся ключом каталога. Цепочка фолбэка и политика ошибок по умолчанию берутся из
  * каталога — переопределять их здесь нужно редко.
@@ -117,5 +123,91 @@ final class RunOptions
     {
         $this->params = new GenerationParams();
         $this->toolArgsGuard = ToolArgsGuard::default();
+    }
+
+    /** Ключи, которые можно задать конфигом. Остальные поля — только из кода. */
+    private const CONFIGURABLE = [
+        'model', 'fallback', 'maxSwitches', 'policy', 'stickyFallback',
+        'maxTurns', 'maxToolCalls', 'deadlineSeconds',
+        'params', 'extraParams', 'toolChoice', 'toolArgsGuard', 'exposeToolExceptions',
+        'limitNudgeMessage', 'limitFallbackText', 'turnsExhaustedText',
+        'toolLimitReachedText', 'toolFailedText', 'toolFailedPrefix', 'encodeFailedText',
+        'firstUseResultKey',
+    ];
+
+    /**
+     * Опции из массива конфигурации — обычно из секции `defaultRun` каталога.
+     *
+     * Незаданные ключи остаются со значениями по умолчанию класса. Неизвестный ключ — ошибка:
+     * опечатка вроде `maxTurn` иначе молча оставила бы прогону дефолтные сорок оборотов.
+     */
+    public static function fromArray(array $config): self
+    {
+        $options = new self();
+
+        foreach (array_keys($config) as $key) {
+            if (!in_array((string)$key, self::CONFIGURABLE, true)) {
+                throw new LlmConfigException(
+                    "Опции прогона: неизвестный ключ «{$key}». Допустимы: " . implode(', ', self::CONFIGURABLE) . '.'
+                );
+            }
+        }
+
+        if (isset($config['model'])) {
+            $options->model = (string)$config['model'];
+        }
+        if (isset($config['fallback']) && is_array($config['fallback'])) {
+            $options->fallback = array_values($config['fallback']);
+        }
+        if (isset($config['maxSwitches'])) {
+            $options->maxSwitches = max(0, (int)$config['maxSwitches']);
+        }
+        if (isset($config['policy']) && is_array($config['policy'])) {
+            $options->policy = ErrorPolicy::fromArray($config['policy']);
+        }
+        if (isset($config['stickyFallback'])) {
+            $options->stickyFallback = (bool)$config['stickyFallback'];
+        }
+        if (isset($config['maxTurns'])) {
+            $options->maxTurns = max(0, (int)$config['maxTurns']);
+        }
+        if (isset($config['maxToolCalls'])) {
+            $options->maxToolCalls = max(0, (int)$config['maxToolCalls']);
+        }
+        if (array_key_exists('deadlineSeconds', $config)) {
+            $options->deadlineSeconds = $config['deadlineSeconds'] !== null
+                ? (float)$config['deadlineSeconds']
+                : null;
+        }
+        if (isset($config['params']) && is_array($config['params'])) {
+            $options->params = GenerationParams::fromArray($config['params']);
+        }
+        if (isset($config['extraParams']) && is_array($config['extraParams'])) {
+            $options->extraParams = $config['extraParams'];
+        }
+        if (isset($config['toolChoice'])) {
+            $options->toolChoice = $config['toolChoice'];
+        }
+        // Проверку аргументов конфигом можно только выключить: свои правила задаются объектом.
+        if (array_key_exists('toolArgsGuard', $config) && empty($config['toolArgsGuard'])) {
+            $options->toolArgsGuard = null;
+        }
+        if (isset($config['exposeToolExceptions'])) {
+            $options->exposeToolExceptions = (bool)$config['exposeToolExceptions'];
+        }
+
+        foreach (
+            [
+                'limitNudgeMessage', 'limitFallbackText', 'turnsExhaustedText',
+                'toolLimitReachedText', 'toolFailedText', 'toolFailedPrefix', 'encodeFailedText',
+                'firstUseResultKey',
+            ] as $text
+        ) {
+            if (isset($config[$text])) {
+                $options->{$text} = (string)$config[$text];
+            }
+        }
+
+        return $options;
     }
 }

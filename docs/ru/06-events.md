@@ -8,7 +8,7 @@
 
 ```php
 $emit = function (string $event, string $content, array $meta): void { /* ... */ };
-$runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
+$runner->run($messages, $toolbox, $systemPromptFn, $options, $emit);
 ```
 
 Обычный `callable`; `$event` — одна из констант `Agent\Enum\Event`.
@@ -46,7 +46,7 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 - `$meta['tool_call_id']` — тот же id, что и у соответствующего `TOOL_CALL`.
 - `$meta['tool']` — имя инструмента.
 - `$meta['ok']` — `bool`, значение `Tool\Dto\Result::$ok`. Отличает ошибку инструмента (инструмент отработал, но сообщил о провале) от успеха.
-- `$meta['guard']` — `true`, если вызов отклонён проверкой аргументов и инструмент не исполнялся (см. `Config::$toolArgsGuard`). Интерфейсу это сигнал не рисовать виджет по битому вызову.
+- `$meta['guard']` — `true`, если вызов отклонён проверкой аргументов и инструмент не исполнялся (см. `RunOptions::$toolArgsGuard`). Интерфейсу это сигнал не рисовать виджет по битому вызову.
 - `$meta['exception']` — `true`, если инструмент упал с исключением. Отличает внутренний сбой от `Result::error()`, который инструмент вернул осознанно.
 
 ### `Event::ATTEMPT_FAILED` — `'attempt_failed'`
@@ -68,7 +68,7 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 - `$content` — ключ новой модели.
 - `$meta['from']`, `$meta['to']` — ключи прежней и новой модели.
 
-Дальше прогон продолжается на новой модели (`Config::$stickyFallback`), поэтому событие приходит один раз на переключение, а не на каждый следующий ход.
+Дальше прогон продолжается на новой модели (`RunOptions::$stickyFallback`), поэтому событие приходит один раз на переключение, а не на каждый следующий ход.
 
 Порядок внутри одного хода: `ASSISTANT_MESSAGE` → по одному `TOOL_CALL` на каждый запрошенный вызов (все сразу, при получении ответа модели) → по одному `TOOL_RESULT` на вызов по мере исполнения → цикл продолжается.
 

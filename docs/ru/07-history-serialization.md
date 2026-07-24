@@ -40,7 +40,7 @@ use Hameleon2x\Llm\Factory\MessageFactory;
 
 /** @var Orchestra $orchestra */
 /** @var \Hameleon2x\Llm\Agent\ToolboxInterface $toolbox */
-/** @var \Hameleon2x\Llm\Agent\Dto\RunOptions $config */
+/** @var \Hameleon2x\Llm\Agent\Dto\RunOptions $options */
 
 // 1. Восстанавливаем историю, пришедшую с фронта.
 $rawHistory = json_decode($_POST['history'] ?? '[]', true) ?: [];
@@ -51,7 +51,7 @@ $messages[] = Message::user($_POST['text']);
 
 // 3. Прогоняем агентский цикл.
 $runner = new Runner($orchestra);
-$result = $runner->run($messages, $toolbox, fn() => 'Ты полезный помощник.', $config);
+$result = $runner->run($messages, $toolbox, fn() => 'Ты полезный помощник.', $options);
 
 // 4. Отдаём обновлённую историю обратно.
 echo json_encode([

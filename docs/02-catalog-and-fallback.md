@@ -158,7 +158,7 @@ Arbitrary payload fields and headers merge in the same order: provider → model
 ```php
 // provider: 'extraParams' => ['provider' => ['order' => ['DeepInfra']]]
 // model:    'extraParams' => ['thinking' => ['type' => 'enabled']]
-// call:     $config->extraParams = ['session_id' => 'run_17'];
+// call:     $options->extraParams = ['session_id' => 'run_17'];
 // all three fields end up in the request
 ```
 
@@ -208,7 +208,7 @@ The same section can be attached to a provider and to an individual model — th
 ],
 ```
 
-**A policy is not assembled from pieces: the closest one applies, and it applies in full.** The lookup order is: the run's policy (`Config::$policy` or `Orchestra::withPolicy()`) → the model's `policy` → its provider's `policy` → the catalog's `defaultPolicy`. The first one found is used; the rest are not mixed in.
+**A policy is not assembled from pieces: the closest one applies, and it applies in full.** The lookup order is: the run's policy (`RunOptions::$policy` or `Orchestra::withPolicy()`) → the model's `policy` → its provider's `policy` → the catalog's `defaultPolicy`. The first one found is used; the rest are not mixed in.
 
 Two consequences follow.
 
@@ -285,7 +285,7 @@ It is easy to end up with unpleasant arithmetic here: a 600-second timeout with 
 
 **`maxTotalWaitSeconds` is about the whole call**, so it is a catalog key next to `fallback` and `maxSwitches`: it does not depend on which model is running. It counts from the start of the call; when it runs out, both retries and switches stop and the last error is returned.
 
-**`defaultDeadlineSeconds` is about a whole agent run**: the `Runner` loop calls the model many times and every call gets its own `maxTotalWaitSeconds`, so the upper bound of the run itself is a separate key. It belongs to the catalog because it depends on the installation rather than the task: minutes make sense in a web worker, hours in a console command. A run may set its own deadline (`Config::$deadlineSeconds`), and then the catalog value is not used. Defaults to `null` — no deadline.
+**The deadline of a whole agent run is set elsewhere** — by the run options (`RunOptions::$deadlineSeconds`): the `Runner` loop calls the model many times and every call gets its own `maxTotalWaitSeconds`. The default for every run lives in the catalog's `defaultRun` section — see [08-config-reference.md](08-config-reference.md).
 
 `maxTotalWaitSeconds` defaults to 600 seconds: without a cap the default 120 s timeout, 2 retries and 2 switches stretch a single call to almost twenty minutes, and this library is usually called from a web request. An explicit `null` removes the cap; models that think for more than ten minutes on their own need both it and their `timeout` raised. The model cap (`maxWaitSeconds`) is not set by default.
 

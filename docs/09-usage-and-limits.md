@@ -26,7 +26,7 @@ Besides the three main counters, `Dto\Usage` holds what providers increasingly r
 `Agent\Dto\Result::$usage` — the same object, but summed across all model calls of the run:
 
 ```php
-$result = $runner->run($messages, $toolbox, $systemPromptFn, $config);
+$result = $runner->run($messages, $toolbox, $systemPromptFn, $options);
 
 echo $result->usage->calls;         // how many times the model was called
 echo $result->usage->totalTokens;   // how many tokens were spent in total
@@ -76,9 +76,9 @@ $estimate = $registry->costOf('gpt-5', $usage->promptTokens, $usage->completionT
 
 Five limiters, each with its own purpose:
 
-- **`Config::$maxTurns`** — how many times the model can be called. On exhaustion the run returns `Finish::TURNS_EXHAUSTED` and the text `turnsExhaustedText` in `$content`.
-- **`Config::$maxToolCalls`** — how many tools can be executed. On exhaustion, one more request without tools is made so the model can sum up the collected data; the result is marked `Finish::TOOL_LIMIT`, and if that request fails too — an error with a category.
-- **`Config::$deadlineSeconds`** — the maximum run duration. Checked before every turn, and the remaining time goes to the executor as the wait cap for the call, so retries inside a turn are bounded by it too. On expiry an error of category `deadline` is returned along with the full history.
+- **`RunOptions::$maxTurns`** — how many times the model can be called. On exhaustion the run returns `Finish::TURNS_EXHAUSTED` and the text `turnsExhaustedText` in `$content`.
+- **`RunOptions::$maxToolCalls`** — how many tools can be executed. On exhaustion, one more request without tools is made so the model can sum up the collected data; the result is marked `Finish::TOOL_LIMIT`, and if that request fails too — an error with a category.
+- **`RunOptions::$deadlineSeconds`** — the maximum run duration. Checked before every turn, and the remaining time goes to the executor as the wait cap for the call, so retries inside a turn are bounded by it too. On expiry an error of category `deadline` is returned along with the full history.
 - **`ErrorPolicy::$maxWaitSeconds`** — how long a single model may take: its requests and the pauses between retries. On exhaustion retries stop and the work goes to the next model in the chain, whose own countdown starts from scratch.
 - **`maxTotalWaitSeconds`** (a catalog key) — how long the whole call may take, including every switch. On exhaustion both retries and switches stop, and the last error is returned.
 

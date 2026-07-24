@@ -31,10 +31,10 @@ use Throwable;
  * узнаёт о них через события и продолжает работу на той модели, которая ответила.
  *
  * ```php
- * $config = new Config();
- * $config->model = 'glm-4.6';
+ * $options = new RunOptions();
+ * $options->model = 'glm-4.6';
  *
- * $result = (new Runner($orchestra))->run($messages, $toolbox, fn() => 'Системный промт', $config);
+ * $result = (new Runner($orchestra))->run($messages, $toolbox, fn() => 'Системный промт', $options);
  * echo $result->success ? $result->content : $result->finish;   // completed | error | suspended …
  * ```
  */
@@ -64,7 +64,7 @@ class Runner
         array            $messages,
         ToolboxInterface $toolbox,
         callable         $systemPromptFn,
-        RunOptions       $config,
+        RunOptions       $options,
         ?callable        $emit = null
     ): Result {
         // Приёмник событий — вспомогательный канал (прогресс в интерфейсе, запись в базу). Его сбой
@@ -82,33 +82,29 @@ class Runner
         }
 
         $paramNames = $this->collectParamNames($tools);
-        $toolCallsLeft = $config->maxToolCalls;
+        $toolCallsLeft = $options->maxToolCalls;
         $attempts = [];
-        $currentModel = $config->model;
+        $currentModel = $options->model;
         // Кому уходит следующий запрос и кто ответил последним — разные вещи при stickyFallback = false.
-        $answeredModel = $config->model;
+        $answeredModel = $options->model;
         $lastResponse = null;
 
-        // Срок прогона: свой у задачи либо каталожный — он описывает установку (веб-воркер против
-        // консольной команды), поэтому повторять его в каждом вызывающем сервисе не нужно.
-        $deadline = $config->deadlineSeconds ?? $this->orchestra->registry()->defaultDeadlineSeconds();
-
         $observer = new AttemptObserver($emit);
-        $orchestra = $this->prepareOrchestra($config, $observer);
+        $orchestra = $this->prepareOrchestra($options, $observer);
 
         // Возобновление прерванного хода: в истории мог остаться ассистентский ход с вызовами без
         // ответов — инструмент ждал внешнего ввода либо прогон оборвался посреди исполнения.
         // Дорешиваем их тем же путём, что и обычный ход.
         $pending = $this->findUnansweredToolCalls($messages);
         if ($pending !== []) {
-            $outcome = $this->executeToolCalls($pending, $toolbox, $config, $paramNames, $messages, $toolCallsLeft, $emit);
+            $outcome = $this->executeToolCalls($pending, $toolbox, $options, $paramNames, $messages, $toolCallsLeft, $emit);
             if ($outcome['suspendedIds'] !== []) {
                 return $this->finalize(
                     Result::suspended(
                         $outcome['suspendedIds'],
                         $messages,
                         0,
-                        $config->maxToolCalls - $toolCallsLeft,
+                        $options->maxToolCalls - $toolCallsLeft,
                         $usage
                     ),
                     $answeredModel,
@@ -123,10 +119,10 @@ class Runner
                 $observer->reset();
 
                 return $this->finishOnToolLimit(
-                    $this->withinDeadline($orchestra, $deadline, $startedAt),
+                    $this->withinDeadline($orchestra, $options->deadlineSeconds, $startedAt),
                     $messages,
                     $systemPromptFn,
-                    $config,
+                    $options,
                     $currentModel,
                     0,
                     $usage,
@@ -136,14 +132,14 @@ class Runner
             }
         }
 
-        for ($turn = 0; $turn < $config->maxTurns; $turn++) {
+        for ($turn = 0; $turn < $options->maxTurns; $turn++) {
             $turnsUsed = $turn + 1;
-            $toolCallsUsed = $config->maxToolCalls - $toolCallsLeft;
+            $toolCallsUsed = $options->maxToolCalls - $toolCallsLeft;
 
-            if ($this->deadlineExceeded($deadline, $startedAt)) {
+            if ($this->deadlineExceeded($options->deadlineSeconds, $startedAt)) {
                 return $this->finalize(
                     Result::error(
-                        $this->deadlineError($deadline),
+                        $this->deadlineError($options->deadlineSeconds),
                         $messages,
                         $turn,
                         $toolCallsUsed,
@@ -177,8 +173,8 @@ class Runner
             }
 
             $observer->reset();
-            $request = $this->buildRequest($systemPrompt, $messages, $tools, $config);
-            $response = $this->withinDeadline($orchestra, $deadline, $startedAt)->execute($request, $currentModel);
+            $request = $this->buildRequest($systemPrompt, $messages, $tools, $options);
+            $response = $this->withinDeadline($orchestra, $options->deadlineSeconds, $startedAt)->execute($request, $currentModel);
 
             $attempts = array_merge($attempts, $response->attempts);
             // Потребление считаем только по состоявшимся вызовам: у неудачной попытки блока usage
@@ -207,7 +203,7 @@ class Runner
                 // Кто ответил — это факт прогона, он уходит в результат независимо от того,
                 // продолжаем мы на этой модели или возвращаемся к запрошенной.
                 $answeredModel = $response->modelKey;
-                if ($config->stickyFallback) {
+                if ($options->stickyFallback) {
                     $currentModel = $response->modelKey;
                 }
             }
@@ -252,7 +248,7 @@ class Runner
             $outcome = $this->executeToolCalls(
                 $response->toolCalls,
                 $toolbox,
-                $config,
+                $options,
                 $paramNames,
                 $messages,
                 $toolCallsLeft,
@@ -267,7 +263,7 @@ class Runner
                         $outcome['suspendedIds'],
                         $messages,
                         $turnsUsed,
-                        $config->maxToolCalls - $toolCallsLeft,
+                        $options->maxToolCalls - $toolCallsLeft,
                         $usage
                     ),
                     $answeredModel,
@@ -280,10 +276,10 @@ class Runner
                 $observer->reset();
 
                 return $this->finishOnToolLimit(
-                    $this->withinDeadline($orchestra, $deadline, $startedAt),
+                    $this->withinDeadline($orchestra, $options->deadlineSeconds, $startedAt),
                     $messages,
                     $systemPromptFn,
-                    $config,
+                    $options,
                     $currentModel,
                     $turnsUsed,
                     $usage,
@@ -293,14 +289,14 @@ class Runner
             }
         }
 
-        $messages[] = Message::assistant($config->turnsExhaustedText);
+        $messages[] = Message::assistant($options->turnsExhaustedText);
 
         return $this->finalize(
             Result::success(
-                $config->turnsExhaustedText,
+                $options->turnsExhaustedText,
                 $messages,
-                $config->maxTurns,
-                $config->maxToolCalls - $toolCallsLeft,
+                $options->maxTurns,
+                $options->maxToolCalls - $toolCallsLeft,
                 $usage,
                 Finish::TURNS_EXHAUSTED
             ),
@@ -394,17 +390,17 @@ class Runner
      * Копия исполнителя на этот прогон: переопределения из конфига плюс трансляция попыток
      * и переключений моделей в события цикла.
      */
-    private function prepareOrchestra(RunOptions $config, AttemptObserver $observer): Orchestra
+    private function prepareOrchestra(RunOptions $options, AttemptObserver $observer): Orchestra
     {
         $orchestra = $this->orchestra;
 
-        if ($config->policy !== null) {
-            $orchestra = $orchestra->withPolicy($config->policy);
+        if ($options->policy !== null) {
+            $orchestra = $orchestra->withPolicy($options->policy);
         }
-        if ($config->fallback !== null || $config->maxSwitches !== null) {
+        if ($options->fallback !== null || $options->maxSwitches !== null) {
             $orchestra = $orchestra->withFallback(
-                $config->fallback ?? $orchestra->registry()->fallbackChain(),
-                $config->maxSwitches
+                $options->fallback ?? $orchestra->registry()->fallbackChain(),
+                $options->maxSwitches
             );
         }
 
@@ -415,14 +411,14 @@ class Runner
      * @param Message[]        $messages
      * @param ToolDefinition[] $tools
      */
-    private function buildRequest(string $systemPrompt, array $messages, array $tools, RunOptions $config): Request
+    private function buildRequest(string $systemPrompt, array $messages, array $tools, RunOptions $options): Request
     {
         $withSystem = array_merge([Message::system($systemPrompt)], $messages);
 
-        $request = Request::withTools($withSystem, $tools, $config->toolChoice);
-        $request->setParams($config->params);
-        if ($config->extraParams !== []) {
-            $request->setExtraParams($config->extraParams);
+        $request = Request::withTools($withSystem, $tools, $options->toolChoice);
+        $request->setParams($options->params);
+        if ($options->extraParams !== []) {
+            $request->setExtraParams($options->extraParams);
         }
 
         return $request;
@@ -439,19 +435,19 @@ class Runner
         Orchestra  $orchestra,
         array      $messages,
         callable   $systemPromptFn,
-        RunOptions $config,
+        RunOptions $options,
         ?string    $modelKey,
         int        $turnsUsed,
         Usage      $usage,
         array      $attempts,
         ?Response  $lastResponse = null
     ): Result {
-        $toolCallsUsed = $config->maxToolCalls;
+        $toolCallsUsed = $options->maxToolCalls;
 
         // История без подталкивающего сообщения: если добивка не удастся, отдать её наружу нельзя —
         // приложение сохранит историю, и в диалоге появится реплика пользователя, которой не было.
         $messagesBeforeNudge = $messages;
-        $messages[] = Message::user($config->limitNudgeMessage);
+        $messages[] = Message::user($options->limitNudgeMessage);
 
         try {
             $systemPrompt = (string)$systemPromptFn($messages);
@@ -470,9 +466,9 @@ class Runner
         }
 
         $request = Request::messages(array_merge([Message::system($systemPrompt)], $messages));
-        $request->setParams($config->params);
-        if ($config->extraParams !== []) {
-            $request->setExtraParams($config->extraParams);
+        $request->setParams($options->params);
+        if ($options->extraParams !== []) {
+            $request->setExtraParams($options->extraParams);
         }
 
         $response = $orchestra->execute($request, $modelKey);
@@ -514,11 +510,11 @@ class Runner
             );
         }
 
-        $messages[] = Message::assistant($config->limitFallbackText);
+        $messages[] = Message::assistant($options->limitFallbackText);
 
         return $this->finalize(
             Result::success(
-                $config->limitFallbackText,
+                $options->limitFallbackText,
                 $messages,
                 $turnsUsed,
                 $toolCallsUsed,
@@ -548,7 +544,7 @@ class Runner
     private function executeToolCalls(
         array            $toolCalls,
         ToolboxInterface $toolbox,
-        RunOptions       $config,
+        RunOptions       $options,
         array            $paramNames,
         array            &$messages,
         int              &$toolCallsLeft,
@@ -565,7 +561,7 @@ class Runner
             if ($limitExhausted) {
                 // Бюджет исчерпан: оставшиеся вызовы закрываем ошибкой, иначе завершённый ход
                 // повис бы без ответов и сломал следующий запрос и логику возобновления.
-                $this->answerWithError($toolCall, $config, $config->toolLimitReachedText, $messages, $emit);
+                $this->answerWithError($toolCall, $options, $options->toolLimitReachedText, $messages, $emit);
                 continue;
             }
 
@@ -574,10 +570,10 @@ class Runner
             $toolName = $toolCall->getFunctionName();
             $args = $toolCall->getArguments();
 
-            if ($config->toolArgsGuard !== null) {
-                $leak = $config->toolArgsGuard->findLeak($args, $paramNames[$toolName] ?? []);
+            if ($options->toolArgsGuard !== null) {
+                $leak = $options->toolArgsGuard->findLeak($args, $paramNames[$toolName] ?? []);
                 if ($leak !== null) {
-                    $this->answerWithError($toolCall, $config, $leak, $messages, $emit, true);
+                    $this->answerWithError($toolCall, $options, $leak, $messages, $emit, true);
                     continue;
                 }
             }
@@ -600,8 +596,8 @@ class Runner
                 ]);
                 $this->answerWithError(
                     $toolCall,
-                    $config,
-                    $this->toolExceptionText($e, $config),
+                    $options,
+                    $this->toolExceptionText($e, $options),
                     $messages,
                     $emit,
                     false,
@@ -623,7 +619,7 @@ class Runner
             // системный префикс запроса остаётся стабильным.
             if ($this->isFirstUse($toolName, $toolCall->id, $messages)) {
                 try {
-                    $resultArray = $this->withFirstUseHint($resultArray, $toolName, $toolbox, $config);
+                    $resultArray = $this->withFirstUseHint($resultArray, $toolName, $toolbox, $options);
                 } catch (Throwable $e) {
                     // Пояснение необязательно, а инструмент уже отработал: уронить прогон здесь
                     // значит потерять его результат и получить повторное исполнение при следующем
@@ -635,7 +631,7 @@ class Runner
                 }
             }
 
-            $content = self::encodeForModel($resultArray, $config->encodeFailedText);
+            $content = self::encodeForModel($resultArray, $options->encodeFailedText);
 
             $emit(Event::TOOL_RESULT, $content, [
                 'tool_call_id' => $toolCall->id,
@@ -656,7 +652,7 @@ class Runner
      * ключ: иначе пояснение либо потерялось бы, либо превратило список в объект со случайными
      * числовыми ключами.
      */
-    private function withFirstUseHint(array $result, string $toolName, ToolboxInterface $toolbox, RunOptions $config): array
+    private function withFirstUseHint(array $result, string $toolName, ToolboxInterface $toolbox, RunOptions $options): array
     {
         $hint = trim($toolbox->firstUseHint($toolName));
         if ($hint === '') {
@@ -667,7 +663,7 @@ class Runner
         $isList = $result === [] || array_keys($result) === range(0, count($result) - 1);
 
         if ($isList) {
-            return [$hintKey => $hint, $config->firstUseResultKey => $result];
+            return [$hintKey => $hint, $options->firstUseResultKey => $result];
         }
 
         $result[$hintKey] = $hint;
@@ -682,14 +678,14 @@ class Runner
      */
     private function answerWithError(
         ToolCall   $toolCall,
-        RunOptions $config,
+        RunOptions $options,
         string     $message,
         array      &$messages,
         callable   $emit,
         bool       $guard = false,
         bool       $exception = false
     ): void {
-        $content = self::encodeForModel(['error' => $message], $config->encodeFailedText);
+        $content = self::encodeForModel(['error' => $message], $options->encodeFailedText);
 
         $meta = [
             'tool_call_id' => $toolCall->id,
@@ -716,22 +712,22 @@ class Runner
      * для разработчика и содержит внутренности, а история уходит провайдеру и повторяется на каждом
      * обороте. Разрешённое сообщение приводится к одной строке и обрезается.
      */
-    private function toolExceptionText(Throwable $e, RunOptions $config): string
+    private function toolExceptionText(Throwable $e, RunOptions $options): string
     {
-        if (!$config->exposeToolExceptions) {
-            return $config->toolFailedText;
+        if (!$options->exposeToolExceptions) {
+            return $options->toolFailedText;
         }
 
         $message = trim(preg_replace('/\s+/u', ' ', $e->getMessage()) ?? '');
         if ($message === '') {
-            return $config->toolFailedText;
+            return $options->toolFailedText;
         }
 
         if (mb_strlen($message) > RunOptions::TOOL_EXCEPTION_MAX_LENGTH) {
             $message = mb_substr($message, 0, RunOptions::TOOL_EXCEPTION_MAX_LENGTH) . '…';
         }
 
-        return $config->toolFailedPrefix . $message;
+        return $options->toolFailedPrefix . $message;
     }
 
     /**

@@ -1,8 +1,35 @@
 **Language:** **English** · [Русский](ru/08-config-reference.md)
 
-# Run config reference
+# Run options reference
 
-A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the parameters of a single `Runner::run()` call. Model settings themselves live in the catalog, see [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
+A full walkthrough of [`Agent\Dto\RunOptions`](../src/Agent/Dto/RunOptions.php) — the parameters of a single `Runner::run()` call. Model settings themselves live in the catalog, see [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
+
+## Where the values come from
+
+Options are a call argument, not application configuration: the object is created per run and lives just as long. Defaults for every run are set by the catalog's `defaultRun` section:
+
+```php
+$registry = Registry::fromArray([
+    'providers' => [...],
+    'models'    => [...],
+    'defaultRun' => [
+        'maxTurns'        => 40,
+        'maxToolCalls'    => 30,
+        'deadlineSeconds' => 600,
+        'params'          => ['temperature' => 0.2, 'maxTokens' => 8000],
+    ],
+]);
+```
+
+```php
+$options = $registry->runOptions();          // catalog defaults are already inside
+$options->model = $modelKey;                 // only what depends on this run is left
+$options->extraParams = ['session_id' => $runId];
+
+$result = (new Runner($orchestra))->run($messages, $toolbox, $systemPromptFn, $options);
+```
+
+Every `runOptions()` call returns a fresh object: options belong to a run and must not be shared between runs. An unknown key in `defaultRun` fails the catalog build instead of being silently ignored. `new RunOptions()` works too — then every value comes from the class defaults.
 
 ## Fields
 
@@ -18,7 +45,7 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 
 - **`maxTurns`** (`int`, `40`) — how many times the model can be called. One turn is one request.
 - **`maxToolCalls`** (`int`, `30`) — how many tools can be executed over the whole run, not per turn.
-- **`deadlineSeconds`** (`?float`, `null`) — the maximum run duration in seconds. `null` — the catalog's `defaultDeadlineSeconds` is used; if that is unset too, there is no deadline.
+- **`deadlineSeconds`** (`?float`, `null`) — the maximum run duration in seconds. `null` — no deadline.
 
 **What goes into the request**
 
@@ -44,12 +71,12 @@ All fields are public — set them directly:
 ```php
 use Hameleon2x\Llm\Agent\Dto\RunOptions;
 
-$config = new RunOptions();
-$config->model = 'glm-4.6';
-$config->maxTurns = 16;
-$config->maxToolCalls = 12;
-$config->params->temperature = 0.2;
-$config->params->maxTokens = 8000;
+$options = new RunOptions();
+$options->model = 'glm-4.6';
+$options->maxTurns = 16;
+$options->maxToolCalls = 12;
+$options->params->temperature = 0.2;
+$options->params->maxTokens = 8000;
 ```
 
 ## `model` and switching
@@ -72,7 +99,7 @@ Several tool calls in one turn count as **one** turn, but as several units of `m
 The counter decreases on every executed call across all turns. When it hits zero mid-turn:
 
 1. The remaining calls of that turn are closed with an error — the history stays valid (every call has an answer).
-2. `Message::user($config->limitNudgeMessage)` is added to the history.
+2. `Message::user($options->limitNudgeMessage)` is added to the history.
 3. One more request is made **without** tools.
 4. A non-empty answer is returned as success. A turn with no text but with tool calls yields `limitFallbackText`; a completely empty turn is an `empty_response` error.
 
@@ -89,7 +116,7 @@ The deadline also holds inside a turn: the remaining time is passed to the execu
 `params` overrides the model's and catalog's parameters (merged by explicitness), and the model's `unsupported` strips out what it doesn't accept, on top of everything. `extraParams` merges with the provider's and model's fields and goes into **every** request of the run, including the limit nudge:
 
 ```php
-$config->extraParams = [
+$options->extraParams = [
     'session_id' => 'agent_42_run_17',   // groups the run in the provider's observability
 ];
 ```
@@ -99,7 +126,7 @@ Standard fields (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `too
 OpenRouter plugins are a special case of extra fields:
 
 ```php
-$config->extraParams['plugins'] = [
+$options->extraParams['plugins'] = [
     ['id' => 'web', 'max_results' => 5],
 ];
 ```
@@ -109,10 +136,10 @@ $config->extraParams['plugins'] = [
 Passed through as-is to the OpenAI-compatible `tool_choice` parameter.
 
 ```php
-$config->toolChoice = 'auto';     // the model decides
-$config->toolChoice = 'required'; // the model must call a tool
-$config->toolChoice = 'none';     // tools are visible but cannot be called
-$config->toolChoice = ['type' => 'function', 'function' => ['name' => 'get_weather']];
+$options->toolChoice = 'auto';     // the model decides
+$options->toolChoice = 'required'; // the model must call a tool
+$options->toolChoice = 'none';     // tools are visible but cannot be called
+$options->toolChoice = ['type' => 'function', 'function' => ['name' => 'get_weather']];
 ```
 
 ## `toolArgsGuard`
@@ -120,8 +147,8 @@ $config->toolChoice = ['type' => 'function', 'function' => ['name' => 'get_weath
 Checks arguments before executing a tool and rejects the call if call-format markup leaked into the values. Enabled by default: a missed leak means executing on incomplete data, while a false positive costs one resent call.
 
 ```php
-$config->toolArgsGuard = ToolArgsGuard::default(['~<my_tag~']);  // plus your own patterns
-$config->toolArgsGuard = null;                                    // disable
+$options->toolArgsGuard = ToolArgsGuard::default(['~<my_tag~']);  // plus your own patterns
+$options->toolArgsGuard = null;                                    // disable
 ```
 
 ## What a run returns

@@ -8,7 +8,7 @@
 
 ```php
 $emit = function (string $event, string $content, array $meta): void { /* ... */ };
-$runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
+$runner->run($messages, $toolbox, $systemPromptFn, $options, $emit);
 ```
 
 A plain `callable`; `$event` is one of the constants on `Agent\Enum\Event`.
@@ -46,7 +46,7 @@ Fires once per tool invocation: right after `execute()` returns, and for a call 
 - `$meta['tool_call_id']` — same id as the matching `TOOL_CALL`.
 - `$meta['tool']` — tool name.
 - `$meta['ok']` — `bool`, value of `Tool\Dto\Result::$ok`. Distinguishes tool errors (the tool ran but reported failure) from successes.
-- `$meta['guard']` — `true` when the call was rejected by the argument check and the tool never ran (see `Config::$toolArgsGuard`). A signal for the UI not to render a widget for a corrupted call.
+- `$meta['guard']` — `true` when the call was rejected by the argument check and the tool never ran (see `RunOptions::$toolArgsGuard`). A signal for the UI not to render a widget for a corrupted call.
 - `$meta['exception']` — `true` if the tool threw. Tells an internal failure apart from a `Result::error()` the tool returned on purpose.
 
 ### `Event::ATTEMPT_FAILED` — `'attempt_failed'`
@@ -68,7 +68,7 @@ Work was handed over to the next model in the chain: retrying the previous one d
 - `$content` — the new model's key.
 - `$meta['from']`, `$meta['to']` — previous and new model keys.
 
-The run then continues on the new model (`Config::$stickyFallback`), so the event fires once per switch rather than on every subsequent turn.
+The run then continues on the new model (`RunOptions::$stickyFallback`), so the event fires once per switch rather than on every subsequent turn.
 
 Order within a single turn: `ASSISTANT_MESSAGE` → one `TOOL_CALL` per requested call (all up front, when the model's response arrives) → one `TOOL_RESULT` per call as it executes → loop continues.
 

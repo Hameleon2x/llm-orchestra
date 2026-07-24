@@ -202,21 +202,26 @@ test('срок берётся из конфига прогона', static functi
     assertSame(0, $client->calls(), 'на оборот короче секунды не идём');
 });
 
-test('срок берётся из каталога, когда прогон его не задал', static function (): void {
+test('опции из каталога приносят срок в прогон', static function (): void {
     $client = new FakeChatClient([okBody('не успеет')]);
+    $registry = catalogOf($client, ['defaultRun' => ['deadlineSeconds' => 0.3]]);
 
-    $result = runWith($client, [], null, [], null, ['defaultDeadlineSeconds' => 0.3]);
+    $result = (new Runner(new Orchestra($registry, null, new RecordingSleeper())))
+        ->run([Message::user('вопрос')], new ToolBox([]), systemPrompt(), $registry->runOptions());
 
     assertSame(Finish::DEADLINE, $result->finish);
     assertSame(0, $client->calls());
 });
 
-test('срок прогона сильнее каталожного', static function (): void {
-    $config = new RunOptions();
-    $config->deadlineSeconds = 30.0;
+test('правка опций перекрывает каталожный дефолт', static function (): void {
     $client = new FakeChatClient([okBody('успел')]);
+    $registry = catalogOf($client, ['defaultRun' => ['deadlineSeconds' => 0.3]]);
 
-    $result = runWith($client, [], $config, [], null, ['defaultDeadlineSeconds' => 0.3]);
+    $options = $registry->runOptions();
+    $options->deadlineSeconds = 30.0;
+
+    $result = (new Runner(new Orchestra($registry, null, new RecordingSleeper())))
+        ->run([Message::user('вопрос')], new ToolBox([]), systemPrompt(), $options);
 
     assertTrue($result->success);
     assertSame('успел', $result->content);
