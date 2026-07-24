@@ -2,9 +2,9 @@
 
 # Getting started
 
-The minimum path from `composer require` to a working LLM call.
+The shortest path from `composer require` to a working LLM call.
 
-## Install
+## Installation
 
 ```bash
 composer require hameleon2x/llm-orchestra
@@ -12,105 +12,122 @@ composer require hameleon2x/llm-orchestra
 
 Requirements: PHP 7.4+, `ext-curl`, `ext-json`, `psr/log`.
 
-## Create a client
+## Catalog and executor
 
-`Client` is the entry point. Providers are listed in `$client->providers` as either fully constructed `ProviderInterface` instances or, more commonly, array configs that are lazily instantiated.
+Two entry points: `Registry` is the catalog of providers and models, `Orchestra` executes requests against the catalog.
 
 ```php
 <?php
 require __DIR__ . '/vendor/autoload.php';
 
-use Hameleon2x\Llm\Client;
+use Hameleon2x\Llm\Orchestra;
 use Hameleon2x\Llm\Provider\OpenAiProvider;
+use Hameleon2x\Llm\Registry;
 
-$client = new Client();
-$client->providers = [
-    ['class' => OpenAiProvider::class, 'token' => 'sk-...', 'model' => 'gpt-4o-mini'],
-];
+$registry = Registry::fromArray([
+    'providers' => [
+        'openai' => ['class' => OpenAiProvider::class, 'token' => 'sk-...'],
+    ],
+    'models' => [
+        'mini' => ['provider' => 'openai', 'name' => 'gpt-4o-mini'],
+    ],
+    'defaultModel' => 'mini',
+]);
+
+$orchestra = new Orchestra($registry);
 ```
 
-`class`, `token`, `model` are required; everything else inherits sane defaults — see [02-providers-and-fallback.md](02-providers-and-fallback.md).
+There is exactly as much required here as you see: a provider knows where to call and how to authenticate, a model knows which provider to go through and the slug the API knows it by. Everything else — generation parameters, retry policy, fallback chain — is optional and gets added as needed (see [02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
 
-## Send a request
+The catalog is validated as a whole at build time: a reference to a nonexistent provider, a typo in the fallback chain, or a duplicate alias raises `LlmConfigException` immediately, not at the moment of a production failure.
 
-`Request::simple($system, $user)` is the shortest constructor — one system + one user message. For arbitrary history use `Request::messages($messages)`; for tool calling use `Request::withTools(...)` (typically driven by `Agent\Runner`, see [05-toolbox-and-runner.md](05-toolbox-and-runner.md)).
+## Sending a request
+
+`Request::simple($system, $user)` is the shortest constructor. For an arbitrary history use `Request::messages($messages)`, for tool calling use `Request::withTools(...)` (usually through [`Agent\Runner`](05-toolbox-and-runner.md)).
 
 ```php
 <?php
 use Hameleon2x\Llm\Dto\Request;
 
-$response = $client->execute(Request::simple(
-    'You are a helpful assistant.',
+$response = $orchestra->execute(Request::simple(
+    'You are a concise assistant.',
     'Explain what PHP is in one sentence.'
 ));
 ```
 
-## Read the response
+The second argument of `execute()` is a model key from the catalog. If omitted, `defaultModel` is used:
 
-Always check `isSuccess()` before reading `content` — on failure `content` is `null` and `error` carries the message.
+```php
+$response = $orchestra->execute($request, 'mini');
+```
+
+## Reading the response
+
+Success means the absence of an error. On failure `content` is `null`, and `error` holds a parsed error with a category.
 
 ```php
 <?php
 if ($response->isSuccess()) {
     echo $response->content;
 } else {
-    fwrite(STDERR, "LLM failed: {$response->error}\n");
+    fwrite(STDERR, "LLM failed: {$response->error->category} — {$response->error->message}\n");
 }
 ```
 
-### `Response` surface
-
-| Property / method                                                              | Meaning                                                                |
-|--------------------------------------------------------------------------------|------------------------------------------------------------------------|
-| `$response->status`                                                            | Constant from `Hameleon2x\Llm\Enum\Status`: `SUCCESS`, `RATE_LIMIT`, `PROVIDER_ERROR`, `VALIDATION_ERROR`, `TIMEOUT`, `ERROR`. |
-| `$response->isSuccess()`                                                       | Shortcut for `$status === Status::SUCCESS`.                            |
-| `$response->content`                                                           | Assistant text. `null` on failure or when only tool calls were returned. |
-| `$response->toolCalls`, `$response->hasToolCalls()`                            | `ToolCall[]` from the model.                                           |
-| `$response->provider`, `$response->model`                                      | Which provider/model actually answered.                                |
-| `$response->error`                                                             | Error string when `status !== SUCCESS`.                                |
-| `getPromptTokens()`, `getCompletionTokens()`, `getTotalTokens()`               | Token counts from the provider's `usage` block.                        |
-| `getLatency()`                                                                 | Wall-clock seconds inside the provider call.                           |
-| `$response->metadata`                                                          | Raw map: `promptTokens`, `completionTokens`, `totalTokens`, `finishReason`, `latency`, `attempts`. |
-
-## A second provider: OpenRouter
-
-OpenRouter and Requesty are drop-in replacements — same OpenAI-compatible API, different base URLs and model catalogs. The provider class wires the correct default `baseUrl` for you; override it only when you proxy the API.
+### What else is in the response
 
 ```php
-<?php
-use Hameleon2x\Llm\Provider\OpenRouterProvider;
+$response->content;        // answer text; null on failure or when only tool calls came back
+$response->toolCalls;      // ToolCall[] — what the model asked to call
+$response->usage;          // tokens, cache, reasoning, cost
+$response->modelKey;       // catalog key of the model that answered
+$response->modelName;      // its slug for the API
+$response->providerKey;    // which transport the request went through
+$response->attempts;       // attempt log: retries and model switches
+$response->error;          // ErrorInfo with the failure category; null on success
 
-$client = new Client();
-$client->providers = [
-    ['class' => OpenRouterProvider::class, 'token' => 'sk-or-...', 'model' => 'anthropic/claude-3.5-sonnet'],
+$response->extra('reasoning');                  // model's reasoning, if it returned any
+$response->raw('choices.0.finish_reason');      // any field of the raw response by path
+$response->finishReason();                      // stop, length, tool_calls…
+$response->isTruncated();                       // response truncated by the token limit
+```
 
-    // To use a proxy / self-hosted gateway, add:
-    // 'baseUrl' => 'https://my-proxy.example.com/openrouter',
-];
+Remember `modelKey`: if a failure triggers a switch to a backup model, the answer comes from a different model than the one you requested, and this is the only place you can see it. Details — [10-error-handling.md](10-error-handling.md) and [09-usage-and-limits.md](09-usage-and-limits.md).
 
-$response = $client->execute(Request::simple('You are concise.', 'Name 3 PHP frameworks.'));
-echo $response->content;
+## Generation parameters
+
+They are set at three levels and merge by explicitness: catalog → model → call.
+
+```php
+$request = Request::simple($system, $user)
+    ->setTemperature(0.2)
+    ->setMaxTokens(2000);
+```
+
+The same thing, but for every request of the model — in the catalog:
+
+```php
+'models' => [
+    'mini' => [
+        'provider' => 'openai',
+        'name'     => 'gpt-4o-mini',
+        'params'   => ['temperature' => 0.2, 'maxTokens' => 2000],
+    ],
+],
 ```
 
 ## Provider-specific payload fields
 
-Some providers accept extra payload fields outside the OpenAI-compatible core — for example, OpenRouter understands `session_id` (groups related requests in their dashboard for conversation/agent observability; max 256 chars). OpenAI itself accepts `user` (end-user identifier for abuse tracking). The library does not have a dedicated setter for every such field; instead pass them through `setExtraParams()`:
+Anything without a dedicated parameter is set as extra payload fields — at the provider, model, or call level:
 
 ```php
-<?php
-$request = Request::simple('You are concise.', 'Summarize PHP in one line.')
-    ->setExtraParams([
-        'session_id' => 'agent_42_run_17', // OpenRouter — groups requests under one session
-        // 'user' => 'user-1234',          // OpenAI — end-user identifier
-    ]);
-
-$response = $client->execute($request);
+$request->setExtraParams(['session_id' => 'run_42']);
 ```
 
-`extraParams` are merged into the payload by `OpenAiProvider`. Standard keys (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) always win — you cannot override them this way. Unknown fields a given provider does not understand are typically ignored on the server side; check the target provider's docs before relying on a specific key.
+Standard fields (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`) cannot be overwritten through `extraParams` — use the generation parameters for those.
 
-## See also
+## Next
 
-- [02-providers-and-fallback.md](02-providers-and-fallback.md) — multiple providers, fallback order, retries.
-- [03-logging.md](03-logging.md) — capture retry and fallback events.
-- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — multi-turn dialogs with tool calling.
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — the full catalog: retry policy, fallback chain, model modes.
+- [10-error-handling.md](10-error-handling.md) — error categories and what to do about them.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — the agent loop with tools.

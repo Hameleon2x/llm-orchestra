@@ -1,48 +1,157 @@
 **Language:** **English** · [Русский](ru/05-toolbox-and-runner.md)
 
-# Toolbox and Runner
+# Tools and the agent loop
 
-`Agent\Runner` is the agent loop: call the model, execute any tools it asked for, append results to history, repeat until the model produces a final answer or hits a limit. The `Toolbox` is the registry the `Runner` consults. For the `ToolInterface` contract see [04-tools.md](04-tools.md).
+A regular request is "asked → got text." The agent loop is needed when the model must first **go fetch data**: check the weather, look up a client in the database, compute something. Then the conversation goes like this:
 
-## `AbstractToolbox`
+1. We send the model a question and a list of available tools.
+2. The model responds not with text but with a request: "call `get_weather` with argument `city = Moscow`".
+3. We execute the tool in our own code and send the result back.
+4. The model either asks for something else or answers the user.
 
-`Hameleon2x\Llm\Agent\AbstractToolbox` is the default `ToolboxInterface`. Subclass it, implement `buildTools()`, optionally toggle `log_message`.
+`Agent\Runner` drives these four steps. It takes tools from the **toolbox** — a registry that you describe yourself. How to write a single tool is covered in [04-tools.md](04-tools.md); this page covers how to assemble them together and run the loop.
+
+## Full example
+
+Copy it whole, plug in your token — it will work. The tool here is the simplest possible, so it doesn't distract.
 
 ```php
 <?php
-use App\Llm\Tools\GetWeatherTool;
+require __DIR__ . '/vendor/autoload.php';
+
+use Hameleon2x\Llm\Agent\AbstractToolbox;
+use Hameleon2x\Llm\Agent\Dto\Config;
+use Hameleon2x\Llm\Agent\Runner;
+use Hameleon2x\Llm\Dto\Message;
+use Hameleon2x\Llm\Orchestra;
+use Hameleon2x\Llm\Provider\OpenAiProvider;
+use Hameleon2x\Llm\Registry;
+use Hameleon2x\Llm\Tool\AbstractTool;
+use Hameleon2x\Llm\Tool\Dto\Property;
+use Hameleon2x\Llm\Tool\Dto\Result as ToolResult;
+
+// 1. Tool: what the model will be able to call.
+final class GetWeatherTool extends AbstractTool
+{
+    public function getName(): string
+    {
+        return 'get_weather';
+    }
+
+    public function getDescription(): string
+    {
+        return 'Current weather in a city. Call this when the user asks about the weather.';
+    }
+
+    public function getParameters(): array
+    {
+        return [new Property('city', 'string', 'City name, e.g. "Moscow"', true)];
+    }
+
+    public function execute(array $args): ToolResult
+    {
+        // A call to a weather API would go here.
+        return ToolResult::ok(['city' => $args['city'] ?? '', 'temp' => 7, 'text' => 'cloudy']);
+    }
+}
+
+// 2. Toolbox: the registry of tools for this run.
+final class WeatherToolbox extends AbstractToolbox
+{
+    protected function buildTools(): array
+    {
+        return [new GetWeatherTool()];
+    }
+}
+
+// 3. Model catalog and runner — as in 01-getting-started.
+$orchestra = new Orchestra(Registry::fromArray([
+    'providers' => ['openai' => ['class' => OpenAiProvider::class, 'token' => 'sk-...']],
+    'models'    => ['mini'   => ['provider' => 'openai', 'name' => 'gpt-4o-mini']],
+    'defaultModel' => 'mini',
+]));
+
+// 4. Run settings.
+$config = new Config();
+$config->model = 'mini';
+$config->maxTurns = 5;
+$config->maxToolCalls = 10;
+$config->params->temperature = 0.3;
+
+// 5. Run it.
+$result = (new Runner($orchestra))->run(
+    [Message::user('What is the weather in Moscow right now?')],
+    new WeatherToolbox(),
+    static fn(): string => 'You answer weather questions concisely. Get facts from the tools.',
+    $config
+);
+
+echo $result->success ? $result->content : 'Failure: ' . $result->error->category;
+```
+
+The model will decide on its own that it needs `get_weather` to answer, call it, get back `{"city":"Moscow","temp":7,"text":"cloudy"}`, and formulate an answer for the user.
+
+## How to read the result
+
+`Runner::run()` returns `Agent\Dto\Result`. Useful fields:
+
+- **`$success`** — the run reached an answer. `false` on a model call failure, on run timeout, and on a pause for external input.
+- **`$content`** — the final text for the user; `null` when `$success` is `false`.
+- **`$error`** — `Error\ErrorInfo` with the failure category, if there was one. You don't need to parse the error text, see [10-error-handling.md](10-error-handling.md).
+- **`$finish`** — why the loop stopped: `Finish::COMPLETED`, `TOOL_LIMIT`, `TURNS_EXHAUSTED`, `DEADLINE`, `ERROR`, or `SUSPENDED`.
+- **`$messages`** — the full history after the run (without the system message). Save it if the conversation continues.
+- **`$turnsUsed`, `$toolCallsUsed`** — how many turns and tool calls were spent.
+- **`$usage`** — tokens, cost, and a per-model breakdown, see [09-usage-and-limits.md](09-usage-and-limits.md).
+- **`$modelKey`** — which model worked last. Differs from the requested one if a switch to a fallback happened on failure.
+- **`$attempts`** — the log of model call attempts: retries and switches.
+- **`$lastResponse`** — the last model response in full: reasoning in `extra`, the raw payload in `raw`.
+- **`$suspended`, `$pendingToolCallIds`** — the run has paused and is waiting for external input, see [13-human-in-the-loop.md](13-human-in-the-loop.md).
+
+## Toolbox
+
+The toolbox is a class that gives the loop a list of tools and can execute any of them by name. The simplest approach is to subclass `AbstractToolbox` and implement one method:
+
+```php
+<?php
 use Hameleon2x\Llm\Agent\AbstractToolbox;
 
 final class MyToolbox extends AbstractToolbox
 {
-    // Optional: inject obligatory `log_message` into every tool's schema.
-    protected bool    $withLogMessage        = true;
-    protected ?string $logMessageDescription = 'Short note for the dialog UI: what you are doing and why.';
-
-    // Called lazily once. Inject DI services into tool constructors here.
     protected function buildTools(): array
     {
         return [
-            new GetWeatherTool(/* $someService, $repository, ... */),
-            // ...
+            new GetWeatherTool($this->httpClient),   // a convenient place to pass in your own services
+            new FindClientTool($this->clientRepository),
         ];
     }
 }
 ```
 
-`buildTools()` is the DI seam — tools usually need real services (HTTP clients, repositories, the current user, a clock).
+`buildTools()` is called once, lazily — this is where tools get their dependencies: repositories, HTTP clients, the current user.
 
-### `$withLogMessage` / `$logMessageDescription`
+If your project assembles tools differently (for example, reads them from a database), implement `ToolboxInterface` directly — `Runner` works with any implementation.
 
-When `$withLogMessage = true`, `SchemaBuilder` injects a mandatory string parameter named `log_message` into every tool's JSON Schema. The model is forced to include a short human-readable note with each call — great for chat UIs that want to render "Looking up the weather in Moscow..." without inferring it from the tool name and args.
+### An explanation of the call for the UI: `log_message`
 
-The parameter name is fixed (`SchemaBuilder::LOG_MESSAGE_PARAM = 'log_message'`). The description defaults to the Russian text in `SchemaBuilder::LOG_MESSAGE_DESCRIPTION_DEFAULT`; override it via `$logMessageDescription` to match your prompt language. `log_message` is forwarded into `execute($args)` like any other argument — your tool can read or ignore it.
+Often you want the UI to show not "get_weather was called" but a human-readable string like "Checking the weather in Moscow…". To have the model itself write such a string, enable `log_message` in the toolbox:
 
-## `Runner::run()`
+```php
+final class MyToolbox extends AbstractToolbox
+{
+    protected bool    $withLogMessage        = true;
+    protected ?string $logMessageDescription = 'A short note: what you are doing with this call and why.';
+
+    protected function buildTools(): array { /* ... */ }
+}
+```
+
+Then every tool's schema gains a required string parameter `log_message`, which arrives along with the other arguments — the tool can read it or ignore it, and it reaches the UI through the `TOOL_CALL` event ([06-events.md](06-events.md)).
+
+## The `run()` signature
 
 ```php
 public function run(
-    array            $messages,        // Message[]   — dialog history, no system message
+    array            $messages,        // Message[] — history without the system message
     ToolboxInterface $toolbox,
     callable         $systemPromptFn,  // fn(Message[] $history): string
     Config           $config,
@@ -50,112 +159,37 @@ public function run(
 ): Result
 ```
 
-| Parameter         | Notes                                                                                                              |
-|-------------------|--------------------------------------------------------------------------------------------------------------------|
-| `$messages`       | `Message[]` without a `system` entry. The runner builds the system message every turn via `$systemPromptFn`.       |
-| `$toolbox`        | Any `ToolboxInterface`. Definitions are read once; `execute()` is called per tool call.                            |
-| `$systemPromptFn` | Called every turn with the current history. Return the system prompt — it is used as-is (no per-tool augmentation). |
-| `$config`         | `Agent\Dto\Config` — limits, generation overrides, fallback texts (below).                                          |
-| `$emit`           | Optional event sink — see [06-events.md](06-events.md).                                                             |
+- **`$messages`** — the dialog history. The system message doesn't go here: the loop adds it itself.
+- **`$systemPromptFn`** — a function returning the system prompt. Called every turn and receives the current history, so the prompt can be built dynamically. The returned text goes to the model as-is.
+- **`$config`** — run settings: model, limits, generation parameters. Full breakdown — [08-config-reference.md](08-config-reference.md).
+- **`$emit`** — an optional event sink: progress in the UI, logging the dialog to a database ([06-events.md](06-events.md)).
 
-## `Config`
+## Limits
 
-`Hameleon2x\Llm\Agent\Dto\Config` — knobs for one run:
+Two limits guard against endless work:
 
-| Field                | Type           | Default | Meaning                                                                                                  |
-|----------------------|----------------|---------|----------------------------------------------------------------------------------------------------------|
-| `maxTurns`           | `int`          | 10      | Hard cap on loop iterations (1 iteration = 1 LLM call + its tool execution).                              |
-| `maxToolCalls`       | `int`          | 30      | Hard cap on total tool invocations across the run.                                                        |
-| `temperature`        | `?float`       | `null`  | Overrides provider default; `null` = leave it alone.                                                      |
-| `maxTokens`          | `?int`         | `null`  | Same for token cap.                                                                                       |
-| `toolChoice`         | `string\|array`| `'auto'`| `'auto'`, `'required'`, `'none'`, or `['type' => 'function', 'function' => ['name' => 'foo']]`.            |
-| `plugins`            | `?array`       | `null`  | OpenRouter plugins (e.g. web search) — passed straight through.                                          |
-| `limitNudgeMessage`  | `string`       | …       | User message appended when `maxToolCalls` runs out, before the final LLM call.                            |
-| `limitFallbackText`  | `string`       | …       | Used if that final LLM call returns nothing.                                                              |
-| `turnsExhaustedText` | `string`       | …       | Returned as the assistant answer when `maxTurns` is reached.                                              |
+- **`maxTurns`** — how many times the model can be called. One turn is one request, even if the model asked for five tools at once in it.
+- **`maxToolCalls`** — how many tools can be executed over the whole run.
 
-## `Result`
+What happens when they run out:
 
-`Hameleon2x\Llm\Agent\Dto\Result` — what `Runner::run()` returns:
+- **`maxToolCalls` exhausted.** The remaining calls of this turn are closed with an error, the message `limitNudgeMessage` ("no more data is coming, give a final answer") is added to the history, and one more request is made — this time without tools. The model's answer becomes the result; if it stayed silent, `limitFallbackText` is returned. In both cases `$success` is `true` and `$finish` is `Finish::TOOL_LIMIT`.
+- **`maxTurns` exhausted.** `turnsExhaustedText` is appended to the history and also lands in `$content`. `$success` is `true`, `$finish` is `Finish::TURNS_EXHAUSTED`.
 
-| Property         | Type                | Meaning                                                                            |
-|------------------|---------------------|------------------------------------------------------------------------------------|
-| `$success`       | `bool`              | `false` only when the LLM call itself failed (`Response::isSuccess() === false`).  |
-| `$content`       | `?string`           | Final assistant text on success. `null` on failure.                                |
-| `$error`         | `?string`           | Error message on failure.                                                          |
-| `$messages`      | `Message[]`         | Full dialog after the run (no system message). Persist this if you continue later. |
-| `$turnsUsed`     | `int`               | Iterations consumed (1..`maxTurns`).                                               |
-| `$toolCallsUsed` | `int`               | Tool invocations consumed (0..`maxToolCalls`).                                     |
-| `$usage`         | `Agent\Dto\Usage`   | `llmCalls`, `promptTokens`, `completionTokens`, `totalTokens` across the run.       |
-| `$suspended`         | `bool`      | `true` when the run paused on a suspend-tool waiting for external input (human-in-the-loop). `$content` / `$error` are `null`. |
-| `$pendingToolCallIds`| `string[]`  | When `$suspended`, the tool-call ids whose results must be supplied to resume — see [13-human-in-the-loop.md](13-human-in-the-loop.md). |
+Both cases are not an error but a normal completion within budget. `$finish` helps you tell them apart from a full answer.
 
-Hitting `maxTurns` or `maxToolCalls` produces `success = true` with one of the configured fallback texts as `$content` — it's not an error, the run completed gracefully. Inspect `$turnsUsed` / `$toolCallsUsed` to detect saturation.
+The third limiter is the deadline: `$config->deadlineSeconds`. It is checked before every turn, and on expiry the run returns an error of category `deadline` along with the full history: the tool results collected so far are not lost.
 
-## Tool notes: first-use hints in the result
+## Hint on a tool's first call
 
-Each turn the runner calls `$systemPromptFn($messages)` and uses the returned system prompt as-is — it is stable across turns. Tool notes are delivered differently: when `executeToolCalls` builds a tool's result message, it checks whether this is the **first** call of that tool in the history (`isFirstUse`). If so, it calls `$toolbox->firstUseHint($name)` and, when the text is non-empty, adds it to the result JSON under `$toolbox->firstUseHintKey($name)` (default `hint_use`). The note rides along with the tool's own output, once per dialogue, appended to the tail of the history — the request prefix stays byte-stable so the provider's prompt cache keeps hitting.
+A tool can have a non-obvious response format — for example, fields `docId` and `sources[]` that the model must use in a specific way. Such an explanation shouldn't live in the system prompt: it's sent to the model on every request and costs tokens even when the tool isn't used.
 
-## When limits run out
-
-- **`maxToolCalls` exhausted mid-turn.** `Runner::finishOnToolLimit()` appends `Config::$limitNudgeMessage` as a `user` message, then makes one final LLM call **without tools**. If the model responds, that becomes the answer; otherwise `Config::$limitFallbackText`. Either way `success = true`.
-- **`maxTurns` reached.** The runner appends `Config::$turnsExhaustedText` as the assistant message and returns `success = true`.
-
-## Full example
-
-```php
-<?php
-declare(strict_types=1);
-
-require __DIR__ . '/vendor/autoload.php';
-
-use App\Llm\Tools\GetWeatherTool;
-use App\Llm\Tools\TimeNowTool;
-use Hameleon2x\Llm\Agent\AbstractToolbox;
-use Hameleon2x\Llm\Agent\Dto\Config;
-use Hameleon2x\Llm\Agent\Runner;
-use Hameleon2x\Llm\Client;
-use Hameleon2x\Llm\Dto\Message;
-use Hameleon2x\Llm\Provider\OpenAiProvider;
-
-final class WeatherToolbox extends AbstractToolbox
-{
-    protected bool $withLogMessage = true;
-    protected function buildTools(): array
-    {
-        return [new GetWeatherTool(), new TimeNowTool()];
-    }
-}
-
-$client = new Client();
-$client->providers = [
-    ['class' => OpenAiProvider::class, 'token' => 'sk-...', 'model' => 'gpt-4o-mini'],
-];
-
-$config = new Config();
-$config->maxTurns = 5;
-$config->maxToolCalls = 10;
-$config->temperature = 0.3;
-
-$result = (new Runner($client))->run(
-    [Message::user('What is the weather in Moscow right now?')],
-    new WeatherToolbox(),
-    static fn(array $history): string => 'You are a concise weather assistant. Use tools when you need facts.',
-    $config
-);
-
-echo $result->success ? $result->content : "Run failed: {$result->error}";
-printf(
-    "\nturns=%d toolCalls=%d llmCalls=%d tokens=%d\n",
-    $result->turnsUsed, $result->toolCallsUsed,
-    $result->usage->llmCalls, $result->usage->totalTokens
-);
-```
+Instead, the loop mixes the explanation into the tool's result on its **first** call in the dialog: `$toolbox->firstUseHint($name)` is placed into the JSON response under the key `$toolbox->firstUseHintKey($name)` (default `hint_use`). Once per dialog, at the tail of the history — the start of the request stays unchanged, and the provider's prompt cache keeps working.
 
 ## See also
 
-- [04-tools.md](04-tools.md) — `ToolInterface` contract.
-- [06-events.md](06-events.md) — `$emit` callback for in-loop progress.
-- [13-human-in-the-loop.md](13-human-in-the-loop.md) — pause the loop for external input (`Result::suspend()`) and resume.
-- [02-providers-and-fallback.md](02-providers-and-fallback.md) — how the underlying `Client` chooses a provider.
-- [03-logging.md](03-logging.md) — the separate PSR-3 channel for retries/fallbacks.
+- [04-tools.md](04-tools.md) — how to write a tool.
+- [06-events.md](06-events.md) — loop events: progress, retries, model switching.
+- [08-config-reference.md](08-config-reference.md) — all run settings.
+- [13-human-in-the-loop.md](13-human-in-the-loop.md) — pausing the loop for a user's answer.
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — how a model is chosen and what happens on its failure.

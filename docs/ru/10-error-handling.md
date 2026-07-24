@@ -1,96 +1,173 @@
 **Язык:** [English](../10-error-handling.md) · **Русский**
 
-# Обработка ошибок
+# Ошибки, повторы и запасные модели
 
-Как сбои распространяются по стеку, когда срабатывают повторы и что должен проверять ваш код.
+Сеть рвётся, провайдер отвечает 429, модель молчит. Библиотека берёт на себя повторы и переключение на запасную модель, а вам отдаёт результат, по которому видно, что произошло.
 
-## Иерархия исключений
+## Проверка ошибки
 
-Все исключения пакета наследуются от [`LlmException`](../../src/Exception/LlmException.php), у которого есть флаг `$retryable`:
-
-| Класс                       | Типичная причина                              | `code` | `retryable` |
-|-----------------------------|-----------------------------------------------|--------|-------------|
-| `LlmException`              | базовое                                       | —      | флаг        |
-| `LlmProviderException`      | таймаут, 5xx, битый JSON                      | разное | `true`*     |
-| `LlmRateLimitException`     | HTTP 429                                      | `429`  | `true`      |
-| `LlmValidationException`    | HTTP 400, 401, 403, 404 …                     | code   | `false`     |
-
-\* `LlmProviderException` по умолчанию конструируется с `retryable=true`; `OpenAiProvider` ставит `false` для `cURL error 56` (receive failure from peer), поскольку на практике такие ошибки оказались фатальными.
-
-## Что гарантируют Client и Runner
-
-[`Client::execute()`](../../src/Client.php) **не бросает**. Он ловит `LlmException` и любые `Throwable` от каждого провайдера, логирует (PSR-3) и либо переходит к следующему провайдеру по цепочке fallback, либо возвращает [`Response`](../../src/Dto/Response.php), построенный через `Response::error(...)`, если все провайдеры провалились.
-
-[`Runner::run()`](../../src/Agent/Runner.php) тоже **не бросает**. Если `Client::execute()` вернул неуспешный ответ на любом ходу, `Runner` останавливается и возвращает `Result::error(...)`. Всё, что вылетает из `ToolboxInterface::execute()`, проходит сквозь `Runner` как обычное PHP-исключение — это уже ваша забота.
-
-Вызывающему коду хватает `if (!$response->isSuccess())` / `if (!$result->success)`.
-
-## Как реагирует цепочка fallback
-
-Для каждого провайдера в порядке приоритета `Client`:
-
-1. вызывает `$provider->execute($request)` (он уже оборачивает retry-цикл `BaseProvider`);
-2. при успехе — возвращает ответ;
-3. при неуспешном `Response` — логирует `warning`, запоминает, пробует следующего;
-4. при `LlmException` — логирует `warning`, пробует следующего;
-5. при любом другом `Throwable` — логирует `error` со стектрейсом, пробует следующего.
-
-Когда цикл закончился без успеха, `Client` возвращает последний неуспешный ответ (или синтетический `Status::ERROR`, если все провайдеры бросили исключение).
-
-## Цикл повторов провайдера
-
-[`BaseProvider::execute()`](../../src/Provider/BaseProvider.php) оборачивает `doExecute()` в цикл повторов, управляемый `$retryAttempts` (по умолчанию `3`): на retryable `LlmException` — спим, потом повторяем; на non-retryable — сразу сдаёмся. Backoff — **exponential backoff с потолком в 10 секунд**: 1с → 2с → 4с → 8с → 10с → 10с → …
-
-После исчерпания всех попыток `BaseProvider` мапит последнее исключение в `Status` через `getStatusFromException()` (`RateLimit*` → `RATE_LIMIT`, `Validation*` → `VALIDATION_ERROR`, `Provider*` → `PROVIDER_ERROR`, `Timeout*` → `TIMEOUT`, иначе `ERROR`).
-
-## Статусы ответа
-
-Значения [`Status`](../../src/Enum/Status.php), которые могут появиться в возвращаемом `Response`:
-
-| Константа           | Значение             | Когда                                               |
-|---------------------|----------------------|-----------------------------------------------------|
-| `SUCCESS`           | `'success'`          | запрос завершился штатно                            |
-| `PROVIDER_ERROR`    | `'provider_error'`   | 5xx, битый ответ, общий сетевой сбой                |
-| `RATE_LIMIT`        | `'rate_limit'`       | HTTP 429                                            |
-| `VALIDATION_ERROR`  | `'validation_error'` | HTTP 4xx (кроме 429)                                |
-| `TIMEOUT`           | `'timeout'`          | зарезервировано под таймаут-подобные исключения     |
-| `ERROR`             | `'error'`            | универсальный catch-all                             |
-
-## Разбор неудачного ответа
+Ни `Orchestra`, ни `Runner` не бросают исключений. Успех — это отсутствие ошибки:
 
 ```php
-<?php
-use Hameleon2x\Llm\Enum\Status;
+$response = $orchestra->execute(Request::simple('Отвечай кратко.', 'Что такое PHP?'));
 
-/** @var \Hameleon2x\Llm\Dto\Response $response */
 if ($response->isSuccess()) {
     echo $response->content;
-    return;
+} else {
+    echo 'Не получилось: ' . $response->error->category;   // например: timeout
 }
-
-switch ($response->status) {
-    case Status::RATE_LIMIT:        // back off; user-facing "try again later"
-    case Status::VALIDATION_ERROR:  // bug in our request — do not retry, raise an alert
-    case Status::PROVIDER_ERROR:
-    case Status::TIMEOUT:
-    case Status::ERROR:
-    default:
-        // every provider failed in the fallback chain
-}
-
-$errorMessage = $response->error;
-$rootCause    = $response->exception;  // ?Throwable, original exception if any
-$provider     = $response->provider;   // name of the provider that surfaced the error
 ```
 
-Для агентских прогонов тот же статус сворачивается в `Result::$error` (string). `Result` не несёт исходный `Response::$exception` — логируйте его на уровне провайдера, если нужен.
+Главное правило: **текст ошибки не разбираем**. Формулировки провайдеров меняются без предупреждения, поэтому каждый сбой приводится к категории, и решения принимаются по ней:
 
-## Ошибки выполнения тулз
+```php
+use Hameleon2x\Llm\Error\ErrorCategory;
 
-Сбои тулз здесь — **не** исключения. Возвращайте `Tool\Dto\Result::error('...')`, и `Runner` сериализует его в сообщение `tool` как `{"error": "..."}`. Модель увидит это на следующем ходу и сможет отреагировать. Исключение из `Toolbox::execute()` вылетает из `Runner::run()` без изменений.
+$error = $response->error;
+
+if ($error->isConnectionDrop()) {
+    // сеть, таймаут или пустой ход — данные не потеряны, можно повторить позже
+}
+
+if ($error->is(ErrorCategory::RATE_LIMIT)) {
+    // провайдер просит подождать
+}
+
+if ($error->is(ErrorCategory::CONTEXT_LENGTH, ErrorCategory::BAD_REQUEST)) {
+    // чинится только изменением запроса
+}
+```
+
+То же самое для агентского цикла:
+
+```php
+$result = $runner->run($messages, $toolbox, $systemPromptFn, $config);
+
+if (!$result->success && $result->error !== null) {
+    echo $result->error->category;
+}
+```
+
+## Что лежит в ошибке
+
+```php
+$error->category;        // ErrorCategory::TIMEOUT — по чему принимаем решения
+$error->message;         // техническое сообщение: в лог, не в интерфейс
+$error->httpStatus;      // 429, 500… или null, если сбой не HTTP
+$error->providerCode;    // машинный код провайдера, если он его прислал
+$error->modelKey;        // на какой модели каталога произошёл сбой
+$error->providerKey;     // через какой транспорт
+$error->raw;             // тело ответа провайдера целиком
+$error->exception;       // ?Throwable, если сбой пришёл через исключение
+
+$logger->warning('LLM failed', $error->toArray());   // компактно, без сырого тела
+```
+
+Текст для пользователя библиотека не навязывает: он зависит от приложения. Обычно это своя карта «категория → фраза».
+
+## Категории
+
+Категория определяет и то, повторяем ли мы запрос той же моделью, и то, передаём ли работу следующей модели цепочки.
+
+| Категория           | Повтор | Запасная модель | Когда возникает                                |
+|---------------------|--------|-----------------|------------------------------------------------|
+| `NETWORK`           | да     | да              | обрыв соединения, DNS, cURL 6/7/35/52/56       |
+| `TIMEOUT`           | да     | да              | истёк таймаут запроса (cURL 28, HTTP 408)      |
+| `EMPTY_RESPONSE`    | да     | да              | ход без текста и без вызовов инструментов      |
+| `RATE_LIMIT`        | да     | да              | HTTP 429                                       |
+| `SERVER_ERROR`      | да     | да              | HTTP 5xx                                       |
+| `INVALID_RESPONSE`  | да     | да              | битый JSON, оборванные аргументы вызова        |
+| `MODEL_UNAVAILABLE` | нет    | да              | нет такой модели, снята, перегружена (404)     |
+| `CONTEXT_LENGTH`    | нет    | да              | запрос не помещается в контекст                |
+| `AUTH`              | нет    | да              | HTTP 401/403 — у другого провайдера свой ключ  |
+| `CONTENT_FILTER`    | нет    | нет             | блокировка модерацией                          |
+| `BAD_REQUEST`       | нет    | нет             | HTTP 400/422 — ошибка в самом запросе          |
+| `DEADLINE`          | нет    | нет             | истёк срок прогона                             |
+| `CONFIG`            | нет    | нет             | ошибка каталога                                |
+| `UNKNOWN`           | да     | да              | ничего из перечисленного                       |
+
+Логика простая: повторяем то, что может пройти со второй попытки; переключаем модель там, где проблема в конкретной модели или ключе; останавливаемся, когда неверен сам запрос.
+
+Поведение по умолчанию переопределяется политикой — `retryOn`, `stopOn`, `then`, см. [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
+
+## Порядок действий при сбое
+
+1. Модель, которую выбрал вызывающий, повторяется по своей политике: пауза, затем повтор, пауза больше — снова повтор.
+2. Повторы кончились — политика **стартовой** модели решает: остановиться или передать работу дальше.
+3. Следующая модель цепочки работает по своей политике. Уже опробованные пропускаются, число переключений ограничено `maxSwitches`.
+4. Цепочка исчерпана — возвращается последняя ошибка.
+
+Пример трассы, когда выбрана `gpt-5`, а в цепочке стоят `glm` и `mimo`. Политика по умолчанию — `retries = 2`, то есть до трёх попыток на модель:
+
+```
+gpt-5   попытка 1 → timeout
+gpt-5   попытка 2 (пауза 5с)  → empty_response
+gpt-5   попытка 3 (пауза 10с) → timeout
+glm     попытка 1 → server_error           ← переключение
+glm     попытка 2 (пауза 5с)  → успех ✓
+```
+
+Ответ придёт от `glm`, а `$response->modelKey` будет равен `glm` — по нему видно, кто на самом деле ответил.
+
+## Журнал попыток
+
+Каждая попытка попадает в журнал ответа:
+
+```php
+foreach ($response->attempts as $attempt) {
+    printf(
+        "%s попытка %d: %s\n",
+        $attempt->modelKey,
+        $attempt->attempt,
+        $attempt->success ? 'успех' : $attempt->error->category
+    );
+}
+```
+
+Кроме этого у попытки есть `latency` (сколько заняла), `delayBefore` (пауза перед ней), `willRetry` (будет ли повтор) и `nextDelay` (через сколько).
+
+Журнал доступен после вызова. Если нужно показывать происходящее сразу — подпишитесь на попытки:
+
+```php
+$orchestra = $orchestra->withObserver(function (AttemptLog $attempt): void {
+    if (!$attempt->success && $attempt->willRetry) {
+        echo "Повтор через {$attempt->nextDelay} с ({$attempt->error->category})\n";
+    }
+});
+```
+
+В агентском цикле то же самое приходит событиями `Event::ATTEMPT_FAILED` и `Event::MODEL_FALLBACK` — см. [06-events.md](06-events.md).
+
+## Пустые и оборванные ответы
+
+- Ход без текста и без вызовов инструментов — сбой категории `EMPTY_RESPONSE`. Такое случается при обрыве связи и лечится повтором.
+- Вызов инструмента, аргументы которого не разбираются (ответ оборвался по лимиту токенов), — `INVALID_RESPONSE`. Инструмент на неполных данных не исполняется.
+- Ответ, обрезанный по лимиту токенов, но осмысленный, ошибкой не считается. Проверить: `$response->isTruncated()` или `$response->finishReason() === 'length'`.
+
+## Исключения
+
+Их два, и оба редко попадают в прикладной код.
+
+`LlmException` несёт `ErrorInfo` и живёт внутри провайдеров: `Orchestra` ловит его, записывает попытку и решает, что делать дальше.
+
+`LlmConfigException` возникает при сборке каталога и при обращении к неизвестной модели — то есть тогда, когда ошибку ещё можно исправить в конфиге. Его имеет смысл поймать при старте приложения, чтобы показать понятное сообщение.
+
+Если пишете свой провайдер, категорию удобно получить через `ErrorMapper`:
+
+```php
+use Hameleon2x\Llm\Error\ErrorMapper;
+
+throw new LlmException(ErrorMapper::fromHttpStatus($status, $body, $decoded));
+throw new LlmException(ErrorMapper::fromCurl($errno, $message));
+throw LlmException::of(ErrorCategory::EMPTY_RESPONSE, 'Модель ничего не вернула.');
+```
+
+## Ошибки инструментов
+
+Сбой инструмента ошибкой вызова не считается: верните `Tool\Dto\Result::error('...')`, и модель увидит `{"error": "..."}` в результате инструмента, а цикл продолжится. Подробнее — [04-tools.md](04-tools.md).
 
 ## См. также
 
-- [docs/02-providers-and-fallback.md](02-providers-and-fallback.md) — приоритет провайдеров и семантика fallback.
-- [docs/03-logging.md](03-logging.md) — PSR-3 сообщения от `Client` и `BaseProvider`.
-- [docs/12-custom-provider.md](12-custom-provider.md) — какое исключение бросать из вашего `doExecute()`.
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — политика повторов и цепочка запасных моделей.
+- [06-events.md](06-events.md) — повторы и переключения в агентском цикле.
+- [12-custom-provider.md](12-custom-provider.md) — какие ошибки бросать из своего провайдера.

@@ -1,89 +1,100 @@
 **Language:** **English** · [Русский](ru/09-usage-and-limits.md)
 
-# Usage tracking and cost
+# Usage and limits
 
-How token counters are aggregated across an agent run and how to turn them into money.
+How many tokens and how much money a call cost, and what bounds limit a run.
 
-## The `Usage` DTO
-
-Every `Runner::run()` call returns a [`Result`](../src/Agent/Dto/Result.php) whose `$usage` field is a [`Usage`](../src/Agent/Dto/Usage.php):
-
-| Field              | Type   | Meaning                                                                 |
-|--------------------|--------|-------------------------------------------------------------------------|
-| `llmCalls`         | `int`  | Number of LLM requests made during the run (including the finish nudge). |
-| `promptTokens`     | `int`  | Sum of `prompt_tokens` across all responses.                            |
-| `completionTokens` | `int`  | Sum of `completion_tokens` across all responses.                        |
-| `totalTokens`      | `int`  | Sum of `total_tokens` across all responses.                             |
-
-`Usage::add(Response $r)` is called by `Runner` for every response, successful or not. Providers do return usage metadata on failed responses (or zeros when they don't), so the counters reflect everything the wire saw.
-
-## What gets counted
-
-- Every regular turn — yes.
-- The extra "finish without tools" call triggered when `maxToolCalls` is hit — yes.
-- Responses that came back as errors but with `usage` metadata — yes (added as is).
-- Local provider fallbacks (when a provider throws and `Client` moves on) — no, those never produce a `Response::success(...)` and `Runner` aborts on the first failed response anyway (see [docs/10-error-handling.md](10-error-handling.md)).
-
-## Reading usage after a run
+## Tokens of a single response
 
 ```php
-<?php
-use Hameleon2x\Llm\Agent\Runner;
-use Psr\Log\LoggerInterface;
+$response = $orchestra->execute(Request::simple('Answer briefly.', 'What is PHP?'));
 
-/** @var Runner $runner */
-/** @var LoggerInterface $logger */
+echo $response->usage->promptTokens;      // request tokens
+echo $response->usage->completionTokens;  // response tokens
+echo $response->usage->totalTokens;       // the sum
+```
+
+Besides the three main counters, `Dto\Usage` holds what providers increasingly report:
+
+- **`cachedTokens`** — the part of the prompt served from the provider's cache. Such tokens are usually cheaper than regular ones.
+- **`reasoningTokens`** — reasoning tokens for reasoning models. They are already included in `completionTokens`; this is a clarification, not an addition.
+- **`cost`** — the actual cost in dollars, if the provider sent it. Gateways like OpenRouter and Requesty do this; direct APIs usually don't.
+- **`calls`** — how many model calls are accounted for. For a single response this is `1`; for a run, however many calls were made.
+
+## Tokens of a run
+
+`Agent\Dto\Result::$usage` — the same object, but summed across all model calls of the run:
+
+```php
 $result = $runner->run($messages, $toolbox, $systemPromptFn, $config);
 
-$logger->info('agent run finished', [
-    'success'           => $result->success,
-    'turns_used'        => $result->turnsUsed,
-    'tool_calls_used'   => $result->toolCallsUsed,
-    'llm_calls'         => $result->usage->llmCalls,
-    'prompt_tokens'     => $result->usage->promptTokens,
-    'completion_tokens' => $result->usage->completionTokens,
-    'total_tokens'      => $result->usage->totalTokens,
-]);
+echo $result->usage->calls;         // how many times the model was called
+echo $result->usage->totalTokens;   // how many tokens were spent in total
+echo $result->usage->cost;          // null if the provider doesn't report cost
 ```
 
-For a single `Client::execute()` call (no agent loop), read the same numbers off the `Response`:
+The sum includes all loop turns and the extra request made when the tool-call limit runs out. It does not include: failed attempts (on failure the provider doesn't send a `usage` block) and sub-runs that you start from your own tools — they have their own `Result` and their own `Usage`.
+
+### Per-model breakdown
+
+If a switch to a fallback model happened on failure, two models with different pricing worked within a single run. The total token count then says nothing about the cost, so there is a breakdown:
 
 ```php
-$response->getPromptTokens();
-$response->getCompletionTokens();
-$response->getTotalTokens();
-$response->getLatency();           // seconds, set by BaseProvider
-$response->metadata['finishReason'] ?? null;
+foreach ($result->usage->byModel as $modelKey => $usage) {
+    printf("%s: %d tokens\n", $modelKey, $usage->totalTokens);
+}
+// glm-4.6:   1200 tokens
+// mimo-2.5:  3400 tokens
 ```
 
-## Cost calculation
-
-The package does not bundle a cost calculator — pricing changes too often and varies by provider. The pattern:
+For logs, `toArray()` is handy — it returns only the populated fields:
 
 ```php
-<?php
-// Pricing taken from the provider docs (USD per 1M tokens, example values).
-$prices = [
-    'gpt-4o-mini' => ['prompt' => 0.150, 'completion' => 0.600],
-    'gpt-4o'      => ['prompt' => 2.500, 'completion' => 10.000],
-];
-
-$p    = $prices[$model] ?? null;
-$cost = $p === null
-    ? 0.0
-    : ($result->usage->promptTokens     / 1_000_000) * $p['prompt']
-    + ($result->usage->completionTokens / 1_000_000) * $p['completion'];
+$logger->info('LLM run', $result->usage->toArray());
 ```
 
-Wrap it in a `CostCalculator` service on your side if you need it in many places.
+## Cost
 
-## Caveats
+The most accurate value is the provider's `Usage::$cost`. When it's absent, cost can be estimated from catalog pricing. Pricing is optional and given per million tokens:
 
-- `Usage` does **not** track which model produced each call. If your run can fall back between providers with different prices, log per-response metadata yourself.
-- The numbers come straight from the provider. Cache hits, prompt-caching discounts and similar are reflected only if the provider sends them in `usage`.
+```php
+'models' => [
+    'gpt-5' => [
+        'provider' => 'openai',
+        'name'     => 'gpt-5',
+        'pricing'  => ['in' => 1.25, 'out' => 10.0],
+    ],
+],
+```
+
+```php
+$estimate = $registry->costOf('gpt-5', $usage->promptTokens, $usage->completionTokens);
+// null if the model has no pricing set
+```
+
+## Run limits
+
+Four limiters, each with its own purpose:
+
+- **`Config::$maxTurns`** — how many times the model can be called. On exhaustion the run returns `Finish::TURNS_EXHAUSTED` and the text `turnsExhaustedText` in `$content`.
+- **`Config::$maxToolCalls`** — how many tools can be executed. On exhaustion, one more request without tools is made so the model can sum up the collected data; the result is marked `Finish::TOOL_LIMIT`.
+- **`Config::$deadlineSeconds`** — the maximum run duration. Checked before every turn; on expiry an error of category `deadline` is returned along with the full history.
+- **`ErrorPolicy::$maxWaitSeconds`** — the total time you can wait on retries of a single call. On exhaustion retries stop and the last error is returned.
+
+The first three are set in the run config ([08-config-reference.md](08-config-reference.md)), the last one in the error policy ([02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
+
+A useful rule: keep `maxTurns` noticeably higher than `maxToolCalls`. Then the call limit triggers first, and the run ends with a meaningful answer from the model rather than a service placeholder about exhausted turns.
+
+## Counters after a run
+
+```php
+$result->turnsUsed;        // how many turns were made
+$result->toolCallsUsed;    // how many tools were executed
+$result->finish;           // why the loop stopped
+count($result->attempts);  // how many model call attempts were made, including retries
+```
 
 ## See also
 
-- [docs/05-toolbox-and-runner.md](05-toolbox-and-runner.md) — where `Usage` is populated.
-- [docs/08-config-reference.md](08-config-reference.md) — limits that bound a run.
-- [docs/10-error-handling.md](10-error-handling.md) — failure modes and how usage behaves on errors.
+- [08-config-reference.md](08-config-reference.md) — where run limits are set.
+- [10-error-handling.md](10-error-handling.md) — the attempt log and error categories.

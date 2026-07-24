@@ -2,25 +2,42 @@
 
 namespace Hameleon2x\Llm\Exception;
 
-use Exception;
+use Hameleon2x\Llm\Error\ErrorInfo;
+use RuntimeException;
 use Throwable;
 
 /**
- * Базовое исключение LLM-компонента. Флаг $retryable сообщает Client/BaseProvider,
- * стоит ли повторять запрос.
+ * Сбой LLM-вызова. Всё, что нужно знать об ошибке, лежит в ErrorInfo — отдельных классов на
+ * каждую разновидность сбоя нет: разновидность это категория, а не тип исключения.
+ *
+ * Исключение живёт только внутри провайдера: наружу Orchestra и Runner отдают Response/Result
+ * с полем error, ничего не бросая.
  */
-class LlmException extends Exception
+class LlmException extends RuntimeException
 {
-    public bool $retryable = false;
+    private ErrorInfo $info;
 
-    public function __construct(string $message = "", int $code = 0, ?Throwable $previous = null, bool $retryable = false)
+    public function __construct(ErrorInfo $info, ?Throwable $previous = null)
     {
-        parent::__construct($message, $code, $previous);
-        $this->retryable = $retryable;
+        parent::__construct($info->message, $info->httpStatus ?? 0, $previous ?? $info->exception);
+        $this->info = $info;
     }
 
-    public function isRetryable(): bool
+    public function info(): ErrorInfo
     {
-        return $this->retryable;
+        return $this->info;
+    }
+
+    public function category(): string
+    {
+        return $this->info->category;
+    }
+
+    /**
+     * Короткий способ бросить сбой известной категории из своего провайдера.
+     */
+    public static function of(string $category, string $message, ?Throwable $previous = null): self
+    {
+        return new self(new ErrorInfo($category, $message), $previous);
     }
 }

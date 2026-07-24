@@ -4,51 +4,52 @@ namespace Hameleon2x\Llm\Agent;
 
 use Hameleon2x\Llm\Agent\Dto\Config;
 use Hameleon2x\Llm\Agent\Dto\Result;
-use Hameleon2x\Llm\Agent\Dto\Usage;
 use Hameleon2x\Llm\Agent\Enum\Event;
-use Hameleon2x\Llm\Client;
+use Hameleon2x\Llm\Agent\Enum\Finish;
+use Hameleon2x\Llm\Dto\AttemptLog;
 use Hameleon2x\Llm\Dto\Message;
 use Hameleon2x\Llm\Dto\Request;
+use Hameleon2x\Llm\Dto\Response;
 use Hameleon2x\Llm\Dto\ToolCall;
 use Hameleon2x\Llm\Dto\ToolDefinition;
+use Hameleon2x\Llm\Dto\Usage;
 use Hameleon2x\Llm\Enum\Role;
+use Hameleon2x\Llm\Error\ErrorCategory;
+use Hameleon2x\Llm\Error\ErrorInfo;
 use Hameleon2x\Llm\Factory\ToolCallFactory;
+use Hameleon2x\Llm\Orchestra;
 
 /**
- * Движок агентского цикла LLM: запрос к модели → исполнение tool-calls → повтор,
- * пока модель не вернёт финальный ответ или не упрётся в лимиты.
+ * Агентский цикл: запрос к модели → исполнение вызовов инструментов → повтор, пока модель не даст
+ * финальный ответ или не упрётся в лимиты.
  *
- * Не привязан к БД, конкретному помощнику и UI: историю, реестр тулз, базовый системный промт
- * и реакцию на события цикла передаёт вызывающий код.
+ * Не привязан ни к базе, ни к интерфейсу: историю, реестр инструментов, системный промт и реакцию
+ * на события передаёт вызывающий код. Повторы и переключение моделей делает Orchestra — цикл
+ * узнаёт о них через события и продолжает работу на той модели, которая ответила.
  *
- * Пример (без БД, без сохранения истории):
  * ```php
- * $runner = new Runner($client);
- * $result = $runner->run(
- *     $messages,                  // Message[]
- *     $toolbox,                   // ToolboxInterface
- *     fn() => 'Системный промт',  // callable
- *     new Config()
- * );
- * echo $result->content;
+ * $config = new Config();
+ * $config->model = 'glm-4.6';
+ *
+ * $result = (new Runner($orchestra))->run($messages, $toolbox, fn() => 'Системный промт', $config);
+ * echo $result->success ? $result->content : $result->error->category;
  * ```
  */
 class Runner
 {
-    private Client $llm;
+    private Orchestra $orchestra;
 
-    public function __construct(Client $llm)
+    public function __construct(Orchestra $orchestra)
     {
-        $this->llm = $llm;
+        $this->orchestra = $orchestra;
     }
 
     /**
      * Прогнать агентский цикл.
      *
-     * @param Message[]        $messages       история диалога без system-сообщения
-     * @param callable         $systemPromptFn function(Message[] $history): string — базовый системный промт
-     * @param callable|null    $emit           function(string $event, string $content, array $meta): void —
-     *                                            реакция на события цикла (Event::*); null — без реакции
+     * @param Message[]     $messages       история диалога без системного сообщения
+     * @param callable      $systemPromptFn function(Message[] $history): string
+     * @param callable|null $emit           function(string $event, string $content, array $meta): void
      */
     public function run(
         array            $messages,
@@ -60,24 +61,35 @@ class Runner
         $emit = $emit ?? static function (): void {
         };
 
+        $startedAt = microtime(true);
         $tools = $toolbox->definitions();
+        $paramNames = $this->collectParamNames($tools);
         $toolCallsLeft = $config->maxToolCalls;
         $usage = new Usage();
+        $attempts = [];
+        $currentModel = $config->model;
+        $lastResponse = null;
 
-        // Возобновление прерванного хода. В истории мог остаться ассистентский ход с tool_call'ами
-        // без ответов: suspend-тулза ждёт ответа пользователя, либо прогон оборвался посреди исполнения.
-        // Дорешиваем эти вызовы тем же путём, что и обычный ход: обычные тулзы исполняем, suspend —
-        // снова пауза. Если ответы уже подставлены (целая история) — здесь пусто, идём прямо в цикл.
+        $orchestra = $this->prepareOrchestra($config, $emit);
+
+        // Возобновление прерванного хода: в истории мог остаться ассистентский ход с вызовами без
+        // ответов — инструмент ждал внешнего ввода либо прогон оборвался посреди исполнения.
+        // Дорешиваем их тем же путём, что и обычный ход.
         $pending = $this->findUnansweredToolCalls($messages);
         if ($pending !== []) {
-            $outcome = $this->executeToolCalls($pending, $toolbox, $messages, $toolCallsLeft, $emit);
+            $outcome = $this->executeToolCalls($pending, $toolbox, $config, $paramNames, $messages, $toolCallsLeft, $emit);
             if ($outcome['suspendedIds'] !== []) {
-                return Result::suspended(
-                    $outcome['suspendedIds'],
-                    $messages,
-                    0,
-                    $config->maxToolCalls - $toolCallsLeft,
-                    $usage
+                return $this->finalize(
+                    Result::suspended(
+                        $outcome['suspendedIds'],
+                        $messages,
+                        0,
+                        $config->maxToolCalls - $toolCallsLeft,
+                        $usage
+                    ),
+                    $currentModel,
+                    $attempts,
+                    $lastResponse
                 );
             }
         }
@@ -86,45 +98,77 @@ class Runner
             $turnsUsed = $turn + 1;
             $toolCallsUsed = $config->maxToolCalls - $toolCallsLeft;
 
-            // Системный промт неизменен между оборотами — берём базовый as-is. Пояснения по
-            // тулзам подмешиваются в результат тулзы при первом вызове (см. executeToolCalls):
-            // системный префикс запроса стабилен, prompt-кеш провайдера переиспользуется.
-            $systemPrompt = (string)$systemPromptFn($messages);
-
-            $request = $this->buildRequest($systemPrompt, $messages, $tools, $config);
-            $resp = $this->llm->execute($request);
-            $usage->add($resp);
-
-            if (!$resp->isSuccess()) {
-                return Result::error(
-                    $resp->error ?? 'Ошибка вызова LLM',
-                    $messages,
-                    $turnsUsed,
-                    $toolCallsUsed,
-                    $usage
+            if ($this->deadlineExceeded($config, $startedAt)) {
+                return $this->finalize(
+                    Result::error(
+                        $this->deadlineError($config),
+                        $messages,
+                        $turn,
+                        $toolCallsUsed,
+                        $usage,
+                        Finish::DEADLINE
+                    ),
+                    $currentModel,
+                    $attempts,
+                    $lastResponse
                 );
             }
 
-            if (!$resp->hasToolCalls()) {
-                $content = trim($resp->content ?? '');
-                $answer = $content !== '' ? $content : 'Нет ответа от модели.';
-                $messages[] = Message::assistant($answer);
-                return Result::success($answer, $messages, $turnsUsed, $toolCallsUsed, $usage);
+            // Системный промт между оборотами неизменен: стабильный префикс запроса позволяет
+            // провайдеру переиспользовать кеш промпта. Пояснения по инструментам подмешиваются
+            // в результат инструмента при первом вызове (см. executeToolCalls).
+            $systemPrompt = (string)$systemPromptFn($messages);
+
+            $request = $this->buildRequest($systemPrompt, $messages, $tools, $config);
+            $response = $orchestra->execute($request, $currentModel);
+
+            $usage->add($response->usage, $response->modelKey);
+            $attempts = array_merge($attempts, $response->attempts);
+
+            if (!$response->isSuccess()) {
+                return $this->finalize(
+                    Result::error($response->error, $messages, $turnsUsed, $toolCallsUsed, $usage),
+                    $currentModel,
+                    $attempts,
+                    $lastResponse
+                );
+            }
+
+            $lastResponse = $response;
+            if ($config->stickyFallback && $response->modelKey !== '') {
+                $currentModel = $response->modelKey;
+            }
+
+            if (!$response->hasToolCalls()) {
+                $content = trim((string)$response->content);
+                $messages[] = Message::assistant($content);
+
+                return $this->finalize(
+                    Result::success($content, $messages, $turnsUsed, $toolCallsUsed, $usage),
+                    $currentModel,
+                    $attempts,
+                    $response
+                );
             }
 
             $assistantToolCalls = array_map(
-                static fn(ToolCall $tc) => ToolCallFactory::toArray($tc),
-                $resp->toolCalls
+                static fn(ToolCall $toolCall) => ToolCallFactory::toArray($toolCall),
+                $response->toolCalls
             );
-            $emit(Event::ASSISTANT_MESSAGE, $resp->content ?? '', ['tool_calls' => $assistantToolCalls]);
 
-            // Порядок для API: assistant с tool_calls — сразу перед сообщениями tool.
-            $messages[] = Message::assistant($resp->content ?? '', $assistantToolCalls);
+            $emit(Event::ASSISTANT_MESSAGE, (string)$response->content, [
+                'tool_calls' => $assistantToolCalls,
+                'extra'      => $response->extra,
+                'usage'      => $response->usage->toArray(),
+                'model'      => $response->modelKey,
+            ]);
 
-            // TOOL_CALL — событие «модель запросила вызов»; эмитим один раз здесь, на получении хода
-            // (по всем вызовам сразу). executeToolCalls шлёт только TOOL_RESULT, поэтому добор
-            // неотвеченных вызовов при возобновлении не порождает повторных TOOL_CALL.
-            foreach ($resp->toolCalls as $toolCall) {
+            // Порядок для API: ассистент с tool_calls — непосредственно перед сообщениями tool.
+            $messages[] = Message::assistant((string)$response->content, $assistantToolCalls);
+
+            // TOOL_CALL шлём здесь, на получении хода, один раз по всем вызовам: тогда добор
+            // неотвеченных вызовов при возобновлении не порождает повторных событий.
+            foreach ($response->toolCalls as $toolCall) {
                 $emit(Event::TOOL_CALL, $toolCall->getFunctionName(), [
                     'tool_call_id' => $toolCall->id,
                     'tool'         => $toolCall->getFunctionName(),
@@ -132,33 +176,104 @@ class Runner
                 ]);
             }
 
-            $outcome = $this->executeToolCalls($resp->toolCalls, $toolbox, $messages, $toolCallsLeft, $emit);
+            $outcome = $this->executeToolCalls(
+                $response->toolCalls,
+                $toolbox,
+                $config,
+                $paramNames,
+                $messages,
+                $toolCallsLeft,
+                $emit
+            );
 
             if ($outcome['suspendedIds'] !== []) {
-                // В ходе есть приостановленные вызовы — останавливаем прогон. Внешний код предоставит
-                // их результаты (ответы пользователя) и возобновит цикл, когда закрыты ВСЕ из них.
-                return Result::suspended(
-                    $outcome['suspendedIds'],
-                    $messages,
-                    $turnsUsed,
-                    $config->maxToolCalls - $toolCallsLeft,
-                    $usage
+                // В ходе есть приостановленные вызовы: внешний код предоставит их результаты и
+                // возобновит прогон, когда закрыты все вызовы хода.
+                return $this->finalize(
+                    Result::suspended(
+                        $outcome['suspendedIds'],
+                        $messages,
+                        $turnsUsed,
+                        $config->maxToolCalls - $toolCallsLeft,
+                        $usage
+                    ),
+                    $currentModel,
+                    $attempts,
+                    $lastResponse
                 );
             }
 
             if ($outcome['limitExhausted']) {
-                return $this->finishOnToolLimit($messages, $systemPromptFn, $config, $turnsUsed, $usage);
+                return $this->finishOnToolLimit(
+                    $orchestra,
+                    $messages,
+                    $systemPromptFn,
+                    $config,
+                    $currentModel,
+                    $turnsUsed,
+                    $usage,
+                    $attempts
+                );
             }
         }
 
         $messages[] = Message::assistant($config->turnsExhaustedText);
-        return Result::success(
-            $config->turnsExhaustedText,
-            $messages,
-            $config->maxTurns,
-            $config->maxToolCalls - $toolCallsLeft,
-            $usage
+
+        return $this->finalize(
+            Result::success(
+                $config->turnsExhaustedText,
+                $messages,
+                $config->maxTurns,
+                $config->maxToolCalls - $toolCallsLeft,
+                $usage,
+                Finish::TURNS_EXHAUSTED
+            ),
+            $currentModel,
+            $attempts,
+            $lastResponse
         );
+    }
+
+    /**
+     * Копия исполнителя на этот прогон: переопределения из конфига плюс трансляция попыток
+     * и переключений моделей в события цикла.
+     */
+    private function prepareOrchestra(Config $config, callable $emit): Orchestra
+    {
+        $orchestra = $this->orchestra;
+
+        if ($config->policy !== null) {
+            $orchestra = $orchestra->withPolicy($config->policy);
+        }
+        if ($config->fallback !== null) {
+            $orchestra = $orchestra->withFallback($config->fallback);
+        }
+
+        $seenModel = null;
+
+        return $orchestra->withObserver(static function (AttemptLog $attempt) use ($emit, &$seenModel): void {
+            if ($seenModel !== null && $attempt->modelKey !== $seenModel) {
+                $emit(Event::MODEL_FALLBACK, $attempt->modelKey, [
+                    'from' => $seenModel,
+                    'to'   => $attempt->modelKey,
+                ]);
+            }
+            $seenModel = $attempt->modelKey;
+
+            if ($attempt->success || $attempt->error === null) {
+                return;
+            }
+
+            $emit(Event::ATTEMPT_FAILED, $attempt->error->category, [
+                'model'      => $attempt->modelKey,
+                'provider'   => $attempt->providerKey,
+                'attempt'    => $attempt->attempt,
+                'category'   => $attempt->error->category,
+                'message'    => $attempt->error->message,
+                'will_retry' => $attempt->willRetry,
+                'delay'      => $attempt->nextDelay,
+            ]);
+        });
     }
 
     /**
@@ -167,80 +282,103 @@ class Runner
      */
     private function buildRequest(string $systemPrompt, array $messages, array $tools, Config $config): Request
     {
-        $messagesWithSystem = array_merge([Message::system($systemPrompt)], $messages);
-        $request = Request::withTools($messagesWithSystem, $tools, $config->toolChoice);
-        $this->applyGenerationParams($request, $config);
-        if ($config->plugins !== null) {
-            $request->setPlugins($config->plugins);
+        $withSystem = array_merge([Message::system($systemPrompt)], $messages);
+
+        $request = Request::withTools($withSystem, $tools, $config->toolChoice);
+        $request->setParams($config->params);
+        if ($config->extraParams !== []) {
+            $request->setExtraParams($config->extraParams);
         }
+
         return $request;
     }
 
     /**
-     * При исчерпании лимита tool-calls добавляем сообщение-добивку и просим итоговый ответ без тулз.
+     * Лимит вызовов инструментов исчерпан: добавляем сообщение-добивку и просим итоговый ответ
+     * без инструментов.
      *
-     * @param Message[] $messages
+     * @param Message[]    $messages
+     * @param AttemptLog[] $attempts
      */
     private function finishOnToolLimit(
-        array            $messages,
-        callable         $systemPromptFn,
-        Config           $config,
-        int              $turnsUsed,
-        Usage            $usage
+        Orchestra $orchestra,
+        array     $messages,
+        callable  $systemPromptFn,
+        Config    $config,
+        ?string   $modelKey,
+        int       $turnsUsed,
+        Usage     $usage,
+        array     $attempts
     ): Result {
         $toolCallsUsed = $config->maxToolCalls;
 
         $messages[] = Message::user($config->limitNudgeMessage);
 
         $systemPrompt = (string)$systemPromptFn($messages);
-        $messagesWithSystem = array_merge([Message::system($systemPrompt)], $messages);
+        $request = Request::messages(array_merge([Message::system($systemPrompt)], $messages));
+        $request->setParams($config->params);
+        if ($config->extraParams !== []) {
+            $request->setExtraParams($config->extraParams);
+        }
 
-        $request = Request::messages($messagesWithSystem);
-        $this->applyGenerationParams($request, $config);
+        $response = $orchestra->execute($request, $modelKey);
+        $usage->add($response->usage, $response->modelKey);
+        $attempts = array_merge($attempts, $response->attempts);
 
-        $resp = $this->llm->execute($request);
-        $usage->add($resp);
-        if ($resp->isSuccess() && trim($resp->content ?? '') !== '') {
-            $messages[] = Message::assistant($resp->content);
-            return Result::success($resp->content, $messages, $turnsUsed, $toolCallsUsed, $usage);
+        if ($response->isSuccess() && trim((string)$response->content) !== '') {
+            $messages[] = Message::assistant((string)$response->content);
+
+            return $this->finalize(
+                Result::success(
+                    (string)$response->content,
+                    $messages,
+                    $turnsUsed,
+                    $toolCallsUsed,
+                    $usage,
+                    Finish::TOOL_LIMIT
+                ),
+                $response->modelKey !== '' ? $response->modelKey : $modelKey,
+                $attempts,
+                $response
+            );
         }
 
         $messages[] = Message::assistant($config->limitFallbackText);
-        return Result::success($config->limitFallbackText, $messages, $turnsUsed, $toolCallsUsed, $usage);
-    }
 
-    private function applyGenerationParams(Request $request, Config $config): void
-    {
-        if ($config->temperature !== null) {
-            $request->setTemperature($config->temperature);
-        }
-        if ($config->maxTokens !== null) {
-            $request->setMaxTokens($config->maxTokens);
-        }
-        if ($config->extraParams !== null) {
-            $request->setExtraParams($config->extraParams);
-        }
+        return $this->finalize(
+            Result::success(
+                $config->limitFallbackText,
+                $messages,
+                $turnsUsed,
+                $toolCallsUsed,
+                $usage,
+                Finish::TOOL_LIMIT
+            ),
+            $modelKey,
+            $attempts,
+            $response->isSuccess() ? $response : null
+        );
     }
 
     /**
-     * Исполнить набор tool-вызовов: обычную тулзу — выполнить и дописать tool-сообщение в $messages;
-     * suspend-тулзу — собрать её id (tool-сообщение не пишем, результат придёт извне). Расходует бюджет
-     * $toolCallsLeft; при его исчерпании оставшиеся вызовы закрываются tool-ошибкой (ход остаётся
-     * полностью отвечён) и возвращается limitExhausted=true.
+     * Исполнить набор вызовов: обычный инструмент — выполнить и дописать tool-сообщение;
+     * приостановленный — собрать его id (результат придёт извне). Расходует бюджет $toolCallsLeft;
+     * при его исчерпании оставшиеся вызовы закрываются ошибкой, чтобы ход остался полностью
+     * отвечён, и возвращается limitExhausted = true.
      *
-     * Эмитит только TOOL_RESULT. Событие TOOL_CALL шлёт вызывающий код один раз — на получении хода
-     * от модели, поэтому добор неотвеченных вызовов при возобновлении повторных TOOL_CALL не порождает.
+     * Единый путь и для обычного хода, и для добора неотвеченных вызовов при возобновлении.
      *
-     * Единый путь исполнения и для обычного хода, и для добора неотвеченных вызовов при возобновлении.
-     *
-     * @param ToolCall[] $toolCalls
-     * @param Message[]  $messages       дописывается tool-сообщениями (по ссылке)
-     * @param int        $toolCallsLeft  остаток бюджета вызовов (по ссылке)
+     * @param ToolCall[]              $toolCalls
+     * @param array<string, string[]> $paramNames    имена параметров по имени инструмента
+     * @param Message[]               $messages      дополняется tool-сообщениями (по ссылке)
+     * @param int                     $toolCallsLeft остаток бюджета вызовов (по ссылке)
      * @return array{suspendedIds: string[], limitExhausted: bool}
      */
     private function executeToolCalls(
         array            $toolCalls,
         ToolboxInterface $toolbox,
+        Config           $config,
+        array            $paramNames,
         array            &$messages,
         int              &$toolCallsLeft,
         callable         $emit
@@ -254,19 +392,14 @@ class Runner
             }
 
             if ($limitExhausted) {
-                // Бюджет вызовов исчерпан: оставшиеся вызовы закрываем tool-ошибкой, чтобы ход остался
-                // полностью отвечён. Иначе завершённый ход повис бы без ответов и сломал и следующий
-                // запрос (правило протокола), и логику возобновления (см. findUnansweredToolCalls).
-                $content = json_encode(
-                    ['error' => 'Достигнут лимит вызовов инструментов за прогон.'],
-                    JSON_UNESCAPED_UNICODE
+                // Бюджет исчерпан: оставшиеся вызовы закрываем ошибкой, иначе завершённый ход
+                // повис бы без ответов и сломал следующий запрос и логику возобновления.
+                $this->answerWithError(
+                    $toolCall,
+                    'Достигнут лимит вызовов инструментов за прогон.',
+                    $messages,
+                    $emit
                 );
-                $emit(Event::TOOL_RESULT, $content, [
-                    'tool_call_id' => $toolCall->id,
-                    'tool'         => $toolCall->getFunctionName(),
-                    'ok'           => false,
-                ]);
-                $messages[] = Message::tool($toolCall->id, $content);
                 continue;
             }
 
@@ -275,22 +408,27 @@ class Runner
             $toolName = $toolCall->getFunctionName();
             $args = $toolCall->getArguments();
 
+            if ($config->toolArgsGuard !== null) {
+                $leak = $config->toolArgsGuard->findLeak($args, $paramNames[$toolName] ?? []);
+                if ($leak !== null) {
+                    $this->answerWithError($toolCall, $leak, $messages, $emit, true);
+                    continue;
+                }
+            }
+
             $result = $toolbox->execute($toolName, $args);
 
             if ($result->isSuspended()) {
-                // Suspend-тулза (human-in-the-loop): результат предоставит внешний код позже.
-                // tool-сообщение сейчас не пишем, только копим id вызова — закрыть нужно ВСЕ
-                // приостановленные вызовы перед следующим assistant.
+                // Инструмент ждёт внешнего ввода: tool-сообщение сейчас не пишем, только копим id.
                 $suspendedIds[] = $toolCall->id;
                 continue;
             }
 
             $resultArray = $result->toJsonArray();
 
-            // Первый вызов этой тулзы в истории → кладём в её результат пояснение (как читать поля
-            // ответа) под ключом firstUseHintKey(). В хвост истории (append-only), один раз за
-            // диалог: системный префикс запроса стабилен, prompt-кеш провайдера переиспользуется.
-            // Только если пояснение непустое.
+            // Первый вызов инструмента в истории — кладём в его результат пояснение о том, как
+            // читать поля ответа. Дописывается в хвост истории один раз за диалог, поэтому
+            // системный префикс запроса остаётся стабильным.
             if ($this->isFirstUse($toolName, $toolCall->id, $messages)) {
                 $hint = trim($toolbox->firstUseHint($toolName));
                 if ($hint !== '') {
@@ -313,15 +451,61 @@ class Runner
     }
 
     /**
-     * Первый ли это вызов тулзы $toolName в истории. Первым считается самое раннее по порядку
-     * вхождение имени тулзы в assistant-ходах: если его id совпадает с текущим вызовом — это
-     * первый вызов. Так пояснение (firstUseHint) подмешивается ровно один раз за диалог, включая
-     * случай нескольких одноимённых вызовов в одном ходе — пояснение получит только первый.
+     * Закрыть вызов ошибкой: модель увидит её на следующем ходу и сможет отреагировать.
      *
-     * По имени, а не по факту записи пояснения: на возобновлении/повторе тулза уже отвечена и не
-     * переисполняется, а новый вызов того же имени найдёт более раннее вхождение и хинт не получит.
+     * @param Message[] $messages дополняется по ссылке
+     */
+    private function answerWithError(
+        ToolCall $toolCall,
+        string   $message,
+        array    &$messages,
+        callable $emit,
+        bool     $guard = false
+    ): void {
+        $content = json_encode(['error' => $message], JSON_UNESCAPED_UNICODE);
+
+        $meta = [
+            'tool_call_id' => $toolCall->id,
+            'tool'         => $toolCall->getFunctionName(),
+            'ok'           => false,
+        ];
+        if ($guard) {
+            $meta['guard'] = true;
+        }
+
+        $emit(Event::TOOL_RESULT, $content, $meta);
+        $messages[] = Message::tool($toolCall->id, $content);
+    }
+
+    /**
+     * Имена параметров каждого инструмента — нужны проверке аргументов: тег, названный по имени
+     * параметра, в значении другого параметра означает протёкшую разметку вызова.
      *
-     * @param Message[] $messages история с уже дописанным assistant-ходом текущего вызова
+     * @param ToolDefinition[] $tools
+     * @return array<string, string[]>
+     */
+    private function collectParamNames(array $tools): array
+    {
+        $names = [];
+        foreach ($tools as $tool) {
+            $name = (string)($tool->function['name'] ?? '');
+            if ($name === '') {
+                continue;
+            }
+            $properties = $tool->function['parameters']['properties'] ?? [];
+            $names[$name] = is_array($properties) ? array_map('strval', array_keys($properties)) : [];
+        }
+
+        return $names;
+    }
+
+    /**
+     * Первый ли это вызов инструмента в истории. Первым считается самое раннее вхождение имени в
+     * ассистентских ходах: если его id совпадает с текущим вызовом — это первый вызов. Так
+     * пояснение подмешивается ровно один раз за диалог, включая случай нескольких одноимённых
+     * вызовов в одном ходе.
+     *
+     * @param Message[] $messages история с уже дописанным ходом текущего вызова
      */
     private function isFirstUse(string $toolName, string $currentCallId, array $messages): bool
     {
@@ -338,23 +522,21 @@ class Runner
                 }
             }
         }
+
         return true;
     }
 
     /**
-     * Все tool-вызовы истории, оставшиеся без ответного tool-сообщения. Возникают при возобновлении:
-     * suspend ждёт ответа пользователя, либо прогон оборвался посреди исполнения тулз — их нужно
-     * дорешить, прежде чем снова обращаться к модели.
+     * Вызовы инструментов, оставшиеся без ответного tool-сообщения. Возникают при возобновлении:
+     * инструмент ждёт внешнего ввода либо прогон оборвался посреди исполнения.
      *
-     * Простая разница множеств (все вызовы минус все ответы) безопасна, потому что держится инвариант
-     * «завершённый ход всегда полностью отвечён»: обычные ходы закрываются перед следующим assistant,
-     * а ход, обрезанный лимитом вызовов, закрывается tool-ошибками в executeToolCalls. Значит без
-     * ответа может остаться только текущий незавершённый ход — его и дорешиваем (дописывая в хвост).
-     *
-     * В истории tool_calls лежат как массивы (формат API) — восстанавливаем в ToolCall.
+     * Разница множеств безопасна, потому что держится инвариант «завершённый ход всегда полностью
+     * отвечён»: обычные ходы закрываются перед следующим ассистентом, а ход, обрезанный лимитом
+     * вызовов, закрывается ошибками в executeToolCalls. Значит без ответа может остаться только
+     * текущий незавершённый ход.
      *
      * @param Message[] $messages
-     * @return ToolCall[] неотвеченные вызовы (пустой массив — дорешивать нечего)
+     * @return ToolCall[]
      */
     private function findUnansweredToolCalls(array $messages): array
     {
@@ -381,6 +563,39 @@ class Runner
                 $unanswered[] = ToolCallFactory::fromArray($raw);
             }
         }
+
         return $unanswered;
+    }
+
+    private function deadlineExceeded(Config $config, float $startedAt): bool
+    {
+        if ($config->deadlineSeconds === null) {
+            return false;
+        }
+
+        return (microtime(true) - $startedAt) >= $config->deadlineSeconds;
+    }
+
+    private function deadlineError(Config $config): ErrorInfo
+    {
+        return new ErrorInfo(
+            ErrorCategory::DEADLINE,
+            'Истёк отведённый на прогон срок (' . $config->deadlineSeconds . ' с).',
+            false
+        );
+    }
+
+    /**
+     * Дописать в результат сведения о прогоне: модель, журнал попыток, последний ответ.
+     *
+     * @param AttemptLog[] $attempts
+     */
+    private function finalize(Result $result, ?string $modelKey, array $attempts, ?Response $lastResponse): Result
+    {
+        $result->modelKey = (string)$modelKey;
+        $result->attempts = $attempts;
+        $result->lastResponse = $lastResponse;
+
+        return $result;
     }
 }

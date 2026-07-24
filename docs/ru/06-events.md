@@ -13,9 +13,9 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 
 Просто `callable`; `$event` — одна из констант `Agent\Enum\Event`.
 
-## Три события
+## События
 
-`Hameleon2x\Llm\Agent\Enum\Event`:
+`Hameleon2x\Llm\Agent\Enum\Event`: три события хода и два события о сбоях вызова модели.
 
 ### `Event::ASSISTANT_MESSAGE` — `'assistant_message'`
 
@@ -23,6 +23,9 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 
 - `$content` — текст ассистента рядом с вызовами тулз (может быть пустым).
 - `$meta['tool_calls']` — массив tool calls в формате API OpenAI (`['id' => ..., 'type' => 'function', 'function' => ['name' => ..., 'arguments' => '{...}']]`), собранный через `Factory\ToolCallFactory::toArray()`.
+- `$meta['extra']` — данные провайдера по карте `capture`: размышления модели (`reasoning`), ссылки, отказы.
+- `$meta['usage']` — потребление этого хода (`Dto\Usage::toArray()`).
+- `$meta['model']` — ключ модели, ответившей на этот ход. После переключения отличается от запрошенной.
 
 ### `Event::TOOL_CALL` — `'tool_call'`
 
@@ -41,6 +44,28 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 - `$meta['tool_call_id']` — тот же id, что и у соответствующего `TOOL_CALL`.
 - `$meta['tool']` — имя тулзы.
 - `$meta['ok']` — `bool`, значение `Tool\Dto\Result::$ok`. Отличает ошибки тулзы (тулза отработала, но сообщила о провале) от успехов.
+- `$meta['guard']` — `true`, если вызов отклонён проверкой аргументов и тулза не исполнялась (см. `Config::$toolArgsGuard`). Интерфейсу это сигнал не рисовать виджет по битому вызову.
+
+### `Event::ATTEMPT_FAILED` — `'attempt_failed'`
+
+Попытка вызова модели не удалась. Приходит и на промежуточные неудачи (за которыми будет повтор), и на последнюю.
+
+- `$content` — категория ошибки (`Error\ErrorCategory`).
+- `$meta['model']`, `$meta['provider']` — где произошёл сбой.
+- `$meta['attempt']` — номер попытки этой моделью.
+- `$meta['category']`, `$meta['message']` — категория и техническое сообщение.
+- `$meta['will_retry']` — будет ли повтор; `$meta['delay']` — через сколько секунд.
+
+Показывать «повторяю запрос» стоит только при `will_retry`: иначе следом придёт либо переключение модели, либо ошибка прогона.
+
+### `Event::MODEL_FALLBACK` — `'model_fallback'`
+
+Работа передана следующей модели цепочки: повторы предыдущей не помогли.
+
+- `$content` — ключ новой модели.
+- `$meta['from']`, `$meta['to']` — ключи прежней и новой модели.
+
+Дальше прогон продолжается на новой модели (`Config::$stickyFallback`), поэтому событие приходит один раз на переключение, а не на каждый следующий ход.
 
 Порядок внутри одного хода: `ASSISTANT_MESSAGE` → по одному `TOOL_CALL` на каждый запрошенный вызов (все сразу, при получении ответа модели) → по одному `TOOL_RESULT` на вызов по мере исполнения → цикл продолжается.
 

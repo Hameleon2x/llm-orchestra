@@ -2,71 +2,50 @@
 
 namespace Hameleon2x\Llm\Dto;
 
+use Hameleon2x\Llm\Config\GenerationParams;
+
 /**
- * Запрос к LLM.
+ * Что мы просим у модели: сообщения, инструменты и — при необходимости — переопределения
+ * параметров на этот конкретный вызов.
+ *
+ * Модель здесь не указывается: её выбирает вызывающий, передавая ключ каталога в
+ * Orchestra::execute(). Так один и тот же запрос можно выполнить любой моделью, включая
+ * переключение на следующую при сбое.
  */
-class Request
+final class Request
 {
     /** @var Message[] */
     public array $messages;
 
     /** @var ToolDefinition[]|null */
-    public ?array $tools = null;
+    public ?array $tools;
 
-    /** @var string|array|null 'auto', 'required', 'none' или конкретная тулза */
+    /** @var string|array|null 'auto', 'required', 'none' или конкретная функция */
     public $toolChoice;
 
-    public ?float $temperature = null;
-    public ?float $topP = null;
-    public ?int $maxTokens = null;
+    /** Переопределение параметров генерации на этот вызов. Сильнее модели и каталога. */
+    public ?GenerationParams $params = null;
 
-    /** Переопределение модели для конкретного запроса */
-    public ?string $model = null;
+    /** Дополнительные поля payload на этот вызов (например, session_id прогона). */
+    public array $extraParams = [];
 
-    /** Seed для детерминированной генерации */
-    public ?int $seed = null;
-
-    /** Плагины OpenRouter (напр. web search) */
-    public ?array $plugins = null;
-
-    /**
-     * Произвольные дополнительные параметры payload — провайдер-специфичные расширения,
-     * для которых нет отдельного свойства (session_id у OpenRouter, user у OpenAI и т. п.).
-     * Сливаются в payload так, что стандартные ключи (model, messages, temperature, top_p,
-     * max_tokens, tools, tool_choice, seed, plugins) всегда выигрывают.
-     *
-     * @var array<string, mixed>|null
-     */
-    public ?array $extraParams = null;
+    /** Дополнительные заголовки на этот вызов. */
+    public array $headers = [];
 
     /**
      * @param Message[]             $messages
      * @param ToolDefinition[]|null $tools
      * @param string|array|null     $toolChoice
      */
-    public function __construct(
-        array   $messages,
-        ?array  $tools = null,
-                $toolChoice = null,
-        ?float  $temperature = null,
-        ?float  $topP = null,
-        ?int    $maxTokens = null,
-        ?string $model = null,
-        ?int    $seed = null
-    )
+    public function __construct(array $messages, ?array $tools = null, $toolChoice = null)
     {
         $this->messages = $messages;
         $this->tools = $tools;
         $this->toolChoice = $toolChoice;
-        $this->temperature = $temperature;
-        $this->topP = $topP;
-        $this->maxTokens = $maxTokens;
-        $this->model = $model;
-        $this->seed = $seed;
     }
 
     /**
-     * Простой запрос: system + user.
+     * Системный промт + сообщение пользователя.
      */
     public static function simple(string $systemPrompt, string $userPrompt): self
     {
@@ -77,7 +56,9 @@ class Request
     }
 
     /**
-     * Запрос только с готовой историей сообщений.
+     * Готовая история сообщений.
+     *
+     * @param Message[] $messages
      */
     public static function messages(array $messages): self
     {
@@ -85,8 +66,10 @@ class Request
     }
 
     /**
-     * Запрос с инструментами.
+     * История с инструментами.
      *
+     * @param Message[]         $messages
+     * @param ToolDefinition[]  $tools
      * @param string|array|null $toolChoice
      */
     public static function withTools(array $messages, array $tools, $toolChoice = 'auto'): self
@@ -94,59 +77,71 @@ class Request
         return new self($messages, $tools, $toolChoice);
     }
 
+    public function setParams(GenerationParams $params): self
+    {
+        $this->params = $params;
+
+        return $this;
+    }
+
     public function setTemperature(float $temperature): self
     {
-        $this->temperature = $temperature;
+        $this->ensureParams()->temperature = $temperature;
+
         return $this;
     }
 
     public function setTopP(float $topP): self
     {
-        $this->topP = $topP;
+        $this->ensureParams()->topP = $topP;
+
         return $this;
     }
 
     public function setMaxTokens(int $maxTokens): self
     {
-        $this->maxTokens = $maxTokens;
-        return $this;
-    }
+        $this->ensureParams()->maxTokens = $maxTokens;
 
-    public function setModel(string $model): self
-    {
-        $this->model = $model;
         return $this;
     }
 
     public function setSeed(int $seed): self
     {
-        $this->seed = $seed;
+        $this->ensureParams()->seed = $seed;
+
         return $this;
     }
 
     /**
-     * Плагины OpenRouter (напр. web search).
-     */
-    public function setPlugins(array $plugins): self
-    {
-        $this->plugins = $plugins;
-        return $this;
-    }
-
-    /**
-     * Произвольные дополнительные параметры запроса, которые сольются в payload.
-     * Использовать для провайдер-специфичных полей, не покрытых отдельными сеттерами
-     * (например, `session_id` у OpenRouter, `user` у OpenAI, `response_format` и т. п.).
-     *
-     * Стандартные ключи (model, messages, temperature, top_p, max_tokens, tools,
-     * tool_choice, seed, plugins) перетирают переданные здесь — переопределить их
-     * через extraParams нельзя.
+     * Дополнительные поля payload на этот вызов. Сливаются поверх полей провайдера и модели;
+     * стандартные поля (model, messages, temperature, top_p, max_tokens, tools, tool_choice, seed)
+     * перезаписать нельзя — для них есть параметры генерации.
      *
      * @param array<string, mixed> $extraParams
      */
     public function setExtraParams(array $extraParams): self
     {
         $this->extraParams = $extraParams;
+
         return $this;
+    }
+
+    /**
+     * @param array<string, string> $headers
+     */
+    public function setHeaders(array $headers): self
+    {
+        $this->headers = $headers;
+
+        return $this;
+    }
+
+    private function ensureParams(): GenerationParams
+    {
+        if ($this->params === null) {
+            $this->params = new GenerationParams();
+        }
+
+        return $this->params;
     }
 }

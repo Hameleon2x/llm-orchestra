@@ -13,9 +13,9 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 
 A plain `callable`; `$event` is one of the constants on `Agent\Enum\Event`.
 
-## The three events
+## The events
 
-`Hameleon2x\Llm\Agent\Enum\Event`:
+`Hameleon2x\Llm\Agent\Enum\Event`: three turn events plus two about model call failures.
 
 ### `Event::ASSISTANT_MESSAGE` — `'assistant_message'`
 
@@ -23,6 +23,9 @@ Fires once per turn, immediately after the model returns a response that contain
 
 - `$content` — assistant text alongside the tool calls (may be empty).
 - `$meta['tool_calls']` — array of tool calls in OpenAI wire format (`['id' => ..., 'type' => 'function', 'function' => ['name' => ..., 'arguments' => '{...}']]`), produced by `Factory\ToolCallFactory::toArray()`.
+- `$meta['extra']` — provider data via the `capture` map: model reasoning, citations, refusals.
+- `$meta['usage']` — this turn's consumption (`Dto\Usage::toArray()`).
+- `$meta['model']` — the key of the model that answered this turn. Differs from the requested one after a switch.
 
 ### `Event::TOOL_CALL` — `'tool_call'`
 
@@ -41,6 +44,28 @@ Fires once per tool invocation, right after `execute()` returns.
 - `$meta['tool_call_id']` — same id as the matching `TOOL_CALL`.
 - `$meta['tool']` — tool name.
 - `$meta['ok']` — `bool`, value of `Tool\Dto\Result::$ok`. Distinguishes tool errors (the tool ran but reported failure) from successes.
+- `$meta['guard']` — `true` when the call was rejected by the argument check and the tool never ran (see `Config::$toolArgsGuard`). A signal for the UI not to render a widget for a corrupted call.
+
+### `Event::ATTEMPT_FAILED` — `'attempt_failed'`
+
+A model call attempt failed. Fires both for intermediate failures (a retry follows) and for the last one.
+
+- `$content` — the error category (`Error\ErrorCategory`).
+- `$meta['model']`, `$meta['provider']` — where the failure happened.
+- `$meta['attempt']` — attempt number for that model.
+- `$meta['category']`, `$meta['message']` — the category and the technical message.
+- `$meta['will_retry']` — whether a retry follows; `$meta['delay']` — in how many seconds.
+
+Show "retrying" only when `will_retry` is set: otherwise the next thing to arrive is either a model switch or the run error.
+
+### `Event::MODEL_FALLBACK` — `'model_fallback'`
+
+Work was handed over to the next model in the chain: retrying the previous one didn't help.
+
+- `$content` — the new model's key.
+- `$meta['from']`, `$meta['to']` — previous and new model keys.
+
+The run then continues on the new model (`Config::$stickyFallback`), so the event fires once per switch rather than on every subsequent turn.
 
 Order within a single turn: `ASSISTANT_MESSAGE` → one `TOOL_CALL` per requested call (all up front, when the model's response arrives) → one `TOOL_RESULT` per call as it executes → loop continues.
 

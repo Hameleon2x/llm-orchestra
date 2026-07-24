@@ -2,107 +2,80 @@
 
 # Architecture
 
-How the package is layered, what each layer owns, and what flows through it.
+A map of the package: what it consists of, who is responsible for what, and how a single request travels.
 
 ## Layers
 
 ```
-Agent      Runner / Toolbox / Tool  (multi-turn loop, tools)
-   |
-Client     fallback chain, PSR-3 logging, generation defaults
-   |
-Provider   Request -> wire format -> Response               (retry loop with backoff)
-   |
-Http       ChatClientInterface — POST /v1/chat/completions  (default: CurlChatClient)
-   |
-Network    HTTPS to OpenAI / OpenRouter / Requesty / yours
+Agent\Runner            agent loop: turns, tools, limits, pausing for external input
+      │
+Orchestra               model selection, retries, switching to the next model in the chain
+      │
+Registry                catalog: providers, models, default params, policy, fallback chain
+      │
+Provider\*              API format: payload → HTTP → response parsing
+      │
+Http\ChatClientInterface  transport (cURL by default)
 ```
 
-Each layer talks only to the one below. The boundaries are single PHP types:
+Each layer below knows nothing about the layer above it. The provider doesn't decide whether to retry the request; `Orchestra` doesn't know about tools; `Runner` doesn't know which model ended up answering — it takes the key from the response.
 
-| Boundary                  | Type / interface                                                   |
-|---------------------------|--------------------------------------------------------------------|
-| Agent ↔ Client            | [`Request`](../src/Dto/Request.php), [`Response`](../src/Dto/Response.php) |
-| Client ↔ Provider         | [`ProviderInterface`](../src/Provider/ProviderInterface.php)       |
-| Provider ↔ Http           | [`ChatClientInterface`](../src/Http/ChatClientInterface.php)       |
-| Provider ↔ Agent (tools)  | [`ToolDefinition`](../src/Dto/ToolDefinition.php), [`ToolCall`](../src/Dto/ToolCall.php) |
+## Responsibilities
 
-## Flow: `Client::execute()`
+- **`Registry`** — the catalog and its validation, resolving keys and aliases, the default policy and chain. Doesn't execute requests.
+- **`Orchestra`** — merging settings, retries, model switching, the attempt log, writing to PSR-3. Doesn't know about the API format or the dialog content.
+- **`Provider\*`** — building the payload and parsing the response, classifying failures. Doesn't retry and doesn't pick the model.
+- **`Http\CurlChatClient`** — sending HTTP and transport errors. Doesn't parse the response body.
+- **`Agent\Runner`** — the turn loop, executing tools, limits, resuming. Retries and model switching are not its concern.
+- **`Tool\*`, `Agent\Toolbox*`** — tool schemas and execution. Don't talk to the model.
 
-```
-caller --Request--> Client.execute
-  for each provider in priority order:
-    Provider.execute (BaseProvider)  retry loop (attempts × backoff)
-      Provider.doExecute (OpenAiProvider / yours)
-        Request -> API payload
-        ChatClientInterface.chat -> raw JSON
-        parse -> Response (+ metadata.latency/attempt)
-    if Response.isSuccess() -> return
-    else / on LlmException / on Throwable -> log, next provider
-  all failed -> return last Response::error
-caller <--Response--
-```
+## The path of a single request
 
-Retries inside a single provider: 1s → 2s → 4s → 8s (cap 10s). Fallback between providers: `Client` moves on whenever a provider throws or returns a non-success `Response`. Neither layer throws to the caller — failures are encoded in `Response::$status` + `Response::$error`. See [docs/10-error-handling.md](10-error-handling.md).
+1. `Orchestra::execute($request, $modelKey)` resolves the model through the catalog (key, alias, or `defaultModel`).
+2. `ResolvedCall::build()` merges three levels: catalog → model → call. Generation params by explicitness, arbitrary fields and headers recursively, `unsupported` stripped on top of everything.
+3. The provider builds the payload, calls the transport, parses the response, and applies the `capture` map.
+4. Success is a `Response` with `content`/`toolCalls`, `usage`, `extra`, and the raw response. Failure is an `LlmException` with a category.
+5. `Orchestra` records the attempt in the log, notifies the observer, and decides: retry, hand off to the next model in the chain, or return the error.
+6. `Runner` (when it's the one driving) executes tool calls, appends to the history, and moves to the next turn — now on the model that answered.
 
-## Flow: `Runner::run()`
+## Key decisions
 
-```
-caller --messages, toolbox, systemPromptFn, config--> Runner.run
-  for each turn (up to config.maxTurns):
-    systemPrompt = systemPromptFn(history)   // used as-is
-    Response = Client.execute(Request{system + history + tools})
-    Usage.add(Response)
-    if !Response.isSuccess()      -> Result::error
-    if !Response.hasToolCalls()   -> append assistant msg, Result::success
-    for each tool_call:
-      Toolbox.execute(name, args) -> Tool\Dto\Result
-      append Message::tool(toolCallId, json(result))
-      emit Event::TOOL_CALL / Event::TOOL_RESULT
-      if maxToolCalls exhausted   -> finishOnToolLimit, Result::success
-  maxTurns exhausted              -> Result::success with turnsExhaustedText
-caller <--Result--
-```
+**The unit of choice is the model.** A provider describes the transport; a model is what gets called. The same model behind two providers is two catalog entries, so slugs never collide and neither `supportedModels` nor `priority` is needed.
 
-The system prompt is stable across turns — `$systemPromptFn` is used as-is. A tool's `firstUseHint()` is injected into its **result** (under `firstUseHintKey()`, default `hint_use`) on the first call of that tool in the dialogue, so tool-usage notes ride with the data instead of mutating the prompt prefix. `Tool\Dto\Result` is the typed return from every tool, serialised to JSON for the `tool` message. `Usage` accumulates token counters — see [docs/09-usage-and-limits.md](09-usage-and-limits.md).
+**One flat fallback chain.** Models have no continuation lists of their own — otherwise you'd have to decide whose list wins on a nested failure. Models already tried are skipped, and the number of switches is capped.
 
-## Source layout
+**One retry level.** The transport runs no loop of its own; retries are counted by the model policy. Two levels would multiply, and waiting time would become unpredictable.
+
+**An error is a category.** Provider texts are unstable, so the only place that parses them is `ErrorMapper`, and what comes out is an `ErrorInfo` with a category, a status, and the raw body.
+
+**Nothing in the response is thrown away.** Only what the engine works on is typed; everything else is available through `extra` (normalized by the `capture` map) and `raw` (as received). A new field from a provider never requires a library release.
+
+**Nothing propagates outward.** `Orchestra` and `Runner` return a result with the failure inside; exceptions remain an internal mechanism of providers.
+
+## State
+
+The package holds no state between calls. `Registry` and `Orchestra` are immutable with respect to configuration (`with*` return copies), and `Runner` keeps no history — it arrives and is returned as an array of messages. A suspended run resumes through the same `run()` with tool answers appended; there's no separate resume API.
+
+## Directory map
 
 ```
 src/
-├── Client.php                              fallback chain, PSR-3 logging, withProviders()
-├── Agent/
-│   ├── Runner.php                          agent loop
-│   ├── ToolboxInterface.php / AbstractToolbox.php
-│   ├── Dto/{Config,Result,Usage}.php       per-run params / result / token counters
-│   └── Enum/Event.php                      events emitted via $emit
-├── Provider/
-│   ├── ProviderInterface.php / BaseProvider.php  retry loop, allowlist, exception → Status
-│   ├── OpenAiProvider.php                  OpenAI-compatible (default)
-│   ├── OpenRouterProvider.php              OpenAiProvider + openrouter.ai
-│   └── RequestyProvider.php                OpenAiProvider + router.requesty.ai
-├── Http/{ChatClientInterface,CurlChatClient}.php
-├── Dto/{Request,Response,Message,ToolCall,ToolDefinition}.php
-├── Factory/{Message,ToolCall,ToolDefinition}Factory.php   ↔ array (OpenAI shape)
-├── Tool/
-│   ├── ToolInterface.php / AbstractTool.php
-│   ├── SchemaBuilder.php                   Property[] → JSON Schema parameters
-│   └── Dto/{Property,Result}.php           property descriptor / typed tool result
-├── Exception/{LlmException,LlmProviderException,LlmRateLimitException,LlmValidationException}.php
-└── Enum/{Role,Status}.php
+  Registry.php            the catalog
+  Orchestra.php           execution with policy
+  Config/                 definitions: provider, model, params, policy
+  Dto/                    Request, Response, Message, ToolCall, Usage, AttemptLog, ResolvedCall
+  Error/                  ErrorCategory, ErrorInfo, ErrorMapper
+  Exception/              LlmException, LlmConfigException
+  Http/                   ChatClientInterface, CurlChatClient
+  Provider/               ProviderInterface, BaseProvider, OpenAi/OpenRouter/Requesty
+  Agent/                  Runner, Config, Result, Finish, Event, Toolbox
+  Tool/                   AbstractTool, SchemaBuilder, ToolArgsGuard, Dto
+  Factory/                Message/ToolCall/ToolDefinition ↔ array
+  Support/                ArrayPath, Merge, Sleeper
 ```
-
-## Why so many layers
-
-- **Http vs Provider** — the HTTP transport (cURL, Guzzle, fake) is orthogonal to the API shape. See [docs/11-custom-http-client.md](11-custom-http-client.md).
-- **Provider vs Client** — provider knows one wire format; client owns fallback and PSR-3. See [docs/02-providers-and-fallback.md](02-providers-and-fallback.md).
-- **Client vs Agent** — `Client::execute()` is a one-shot RPC; `Runner` is a stateful loop with tools and per-run limits.
-- **DTOs vs Factories** — typed DTOs (`Message`, `ToolCall`, `ToolDefinition`) plus factories that produce OpenAI-shaped arrays for both the provider wire and front-back transport. See [docs/07-history-serialization.md](07-history-serialization.md).
 
 ## See also
 
-- [docs/01-getting-started.md](01-getting-started.md) — minimal end-to-end example.
-- [docs/02-providers-and-fallback.md](02-providers-and-fallback.md) — provider priority and fallback.
-- [docs/05-toolbox-and-runner.md](05-toolbox-and-runner.md) — the agent loop in detail.
-- [docs/10-error-handling.md](10-error-handling.md) — failure modes and statuses.
-- [docs/12-custom-provider.md](12-custom-provider.md) — adding a new API shape.
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — the catalog in full.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — the agent loop.
+- [10-error-handling.md](10-error-handling.md) — errors and retries.

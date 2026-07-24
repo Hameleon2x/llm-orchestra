@@ -1,109 +1,169 @@
 **Язык:** [English](../11-custom-http-client.md) · **Русский**
 
-# Кастомный HTTP-клиент
+# Свой HTTP-клиент
 
-Как заменить cURL-транспорт, который используют [`OpenAiProvider`](../../src/Provider/OpenAiProvider.php) и его потомки, — для тестов, для Guzzle / Symfony HttpClient или для middleware.
+По умолчанию запросы уходят через `Http\CurlChatClient` — реализацию на `ext-curl` без внешних зависимостей. Подменить транспорт стоит, когда нужен HTTP-клиент приложения (PSR-18, Guzzle), корпоративный прокси или запись фикстур в тестах.
 
-## Контракт
-
-[`ChatClientInterface`](../../src/Http/ChatClientInterface.php) — один метод: `chat(array $params): string` — POST `/v1/chat/completions` с `$params` в теле как JSON, возвращает сырое тело ответа (JSON-строку). На сетевой сбой или non-2xx бросайте любой `Throwable`.
-
-Реализация по умолчанию — [`CurlChatClient`](../../src/Http/CurlChatClient.php): только `ext-curl`, без внешних зависимостей. `OpenAiProvider::getClient()` создаёт его лениво при первом запросе.
-
-Зачем заменять: юнит-тесты (заранее заданные JSON-ответы), другой HTTP-стек (Guzzle, Symfony HttpClient), middleware (логирование, кеширование, HTTP-уровневые повторы).
-
-## Как подставить свой клиент
-
-У `OpenAiProvider` нет публичного сеттера `setClient()` — `$client` объявлен как `protected` и лениво инициализируется в `getClient()`. Чтобы подсунуть свою реализацию, наследуйтесь и переопределите `getClient()`:
+## Интерфейс
 
 ```php
-<?php
-use Hameleon2x\Llm\Http\ChatClientInterface;
-use Hameleon2x\Llm\Provider\OpenAiProvider;
-
-class TestableOpenAiProvider extends OpenAiProvider
+interface ChatClientInterface
 {
-    private ChatClientInterface $injected;
-    public function setChatClient(ChatClientInterface $c): void { $this->injected = $c; }
-    protected function getClient(): ChatClientInterface         { return $this->injected; }
+    /**
+     * @param array                 $payload тело запроса
+     * @param array<string, string> $headers дополнительные заголовки поверх обязательных
+     * @param int|null              $timeout таймаут запроса в секундах; null — таймаут клиента
+     * @return string сырое тело ответа
+     * @throws LlmException при сбое транспорта или ответе с кодом ошибки
+     */
+    public function chat(array $payload, array $headers = [], ?int $timeout = null): string;
 }
 ```
 
-> Публичный `setClient(ChatClientInterface)` на `OpenAiProvider` снял бы необходимость в подклассе. В списке желаемого — как обратно совместимое улучшение.
+Клиент отвечает только за отправку и за приведение транспортных сбоев к `LlmException`. Разбор ответа, повторы и переключение моделей — не его дело.
 
-## Пример: фейковый клиент для юнит-тестов
+## Подключение
+
+Готовый объект или фабрика указываются в конфиге провайдера:
+
+```php
+'providers' => [
+    'openai' => [
+        'class'      => OpenAiProvider::class,
+        'token'      => 'sk-...',
+        'httpClient' => $myClient,                                   // объект
+    ],
+    'openrouter' => [
+        'class'      => OpenRouterProvider::class,
+        'token'      => 'sk-or-...',
+        'httpClient' => fn(ProviderDefinition $def) => new MyClient($def->token, $def->baseUrl),
+    ],
+],
+```
+
+Фабрика получает `ProviderDefinition` — оттуда берутся токен, `baseUrl`, таймаут и флаг `debug`.
+
+## Начнём с простого: клиент для тестов
+
+Самая частая причина подменить транспорт — тесты. Клиент отдаёт заранее заготовленные ответы и запоминает, что у него просили:
 
 ```php
 <?php
+
 use Hameleon2x\Llm\Http\ChatClientInterface;
 
 final class FakeChatClient implements ChatClientInterface
 {
-    /** @var string[] */ private array $responses;
-    /** @var array<int, array> */ public array $sentParams = [];
+    /** @var string[] очередь ответов */
+    private array $queue;
 
-    public function __construct(array $responses) { $this->responses = $responses; }
+    /** @var array[] что было отправлено */
+    public array $sent = [];
 
-    public function chat(array $params): string
+    public function __construct(array $queue)
     {
-        $this->sentParams[] = $params;
-        if ($this->responses === []) {
-            throw new \RuntimeException('FakeChatClient: no more canned responses');
-        }
-        return array_shift($this->responses);
+        $this->queue = $queue;
+    }
+
+    public function chat(array $payload, array $headers = [], ?int $timeout = null): string
+    {
+        $this->sent[] = ['payload' => $payload, 'headers' => $headers];
+
+        return array_shift($this->queue) ?? '{}';
     }
 }
-
-// Wire-up: build a canned chat-completions JSON, inject through the subclass,
-// then call $client->execute() and assert on $response->content / $fake->sentParams.
-$fake = new FakeChatClient([json_encode([
-    'model'   => 'gpt-4o-mini',
-    'choices' => [['message' => ['role' => 'assistant', 'content' => 'pong'], 'finish_reason' => 'stop']],
-    'usage'   => ['prompt_tokens' => 4, 'completion_tokens' => 1, 'total_tokens' => 5],
-])]);
-$provider = new TestableOpenAiProvider('test-token', 'gpt-4o-mini');
-$provider->setChatClient($fake);
 ```
 
-## Пример: клиент на базе Guzzle
+Подключается он так же, как любой другой:
+
+```php
+$registry = Registry::fromArray([
+    'providers' => [
+        'test' => ['class' => OpenAiProvider::class, 'httpClient' => new FakeChatClient([$json1, $json2])],
+    ],
+    'models' => ['m' => ['provider' => 'test', 'name' => 'test-model']],
+]);
+```
+
+Вместе с `Support\SleeperInterface` (пауза-заглушка вместо `usleep`) это позволяет прогонять сценарии повторов и переключения моделей мгновенно:
+
+```php
+$orchestra = new Orchestra($registry, null, new class implements SleeperInterface {
+    public function sleep(float $seconds): void {}
+});
+```
+
+## Пример: PSR-18
 
 ```php
 <?php
-use GuzzleHttp\ClientInterface;
+
+use Hameleon2x\Llm\Error\ErrorMapper;
+use Hameleon2x\Llm\Exception\LlmException;
 use Hameleon2x\Llm\Http\ChatClientInterface;
+use Psr\Http\Client\ClientExceptionInterface;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 
-final class GuzzleChatClient implements ChatClientInterface
+final class Psr18ChatClient implements ChatClientInterface
 {
-    private ClientInterface $http; private string $token; private string $baseUrl;
-    public function __construct(ClientInterface $http, string $token, string $baseUrl = 'https://api.openai.com')
-    { $this->http = $http; $this->token = $token; $this->baseUrl = $baseUrl; }
+    private ClientInterface $client;
+    private RequestFactoryInterface $requests;
+    private StreamFactoryInterface $streams;
+    private string $url;
+    private string $token;
 
-    public function chat(array $params): string
+    public function __construct(
+        ClientInterface $client,
+        RequestFactoryInterface $requests,
+        StreamFactoryInterface $streams,
+        string $baseUrl,
+        string $token
+    ) {
+        $this->client = $client;
+        $this->requests = $requests;
+        $this->streams = $streams;
+        $this->url = rtrim($baseUrl, '/') . '/v1/chat/completions';
+        $this->token = $token;
+    }
+
+    public function chat(array $payload, array $headers = [], ?int $timeout = null): string
     {
-        $params['stream'] = false;
-        $resp = $this->http->request('POST', rtrim($this->baseUrl, '/') . '/v1/chat/completions', [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $this->token,
-                'Content-Type'  => 'application/json',
-                'Accept'        => 'application/json',
-            ],
-            'body'        => json_encode($params, JSON_UNESCAPED_UNICODE),
-            'http_errors' => true,  // Guzzle throws on non-2xx — that's the contract
-        ]);
-        return (string)$resp->getBody();
+        $payload['stream'] = false;
+
+        $request = $this->requests->createRequest('POST', $this->url)
+            ->withHeader('Content-Type', 'application/json')
+            ->withHeader('Accept', 'application/json')
+            ->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->withBody($this->streams->createStream(json_encode($payload, JSON_UNESCAPED_UNICODE)));
+
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader((string)$name, (string)$value);
+        }
+
+        try {
+            $response = $this->client->sendRequest($request);
+        } catch (ClientExceptionInterface $e) {
+            throw new LlmException(ErrorMapper::fromThrowable($e), $e);
+        }
+
+        $body = (string)$response->getBody();
+        $status = $response->getStatusCode();
+
+        if ($status >= 400) {
+            $decoded = json_decode($body, true);
+            throw new LlmException(ErrorMapper::fromHttpStatus($status, $body, is_array($decoded) ? $decoded : null));
+        }
+
+        return $body;
     }
 }
 ```
 
-Бросайте любой `Throwable` на non-2xx — `OpenAiProvider::doExecute()` ловит его и мапит HTTP-код в нужный `Llm*Exception`. Задавайте `$code` исключения равным HTTP-статусу, чтобы маппинг (429 → rate-limit, 4xx → validation, иначе → provider) выбрал правильную ветку.
-
-## Middleware
-
-Композиция через обёртки: `LoggingChatClient`, принимающий `ChatClientInterface $inner` в конструкторе, делает своё дело и делегирует `chat()` в `$inner->chat()`. Подсовывайте `new LoggingChatClient(new CurlChatClient(...), $logger)` через подкласс. Тот же паттерн работает для кеширования, HTTP-уровневых повторов или тест-рекордеров.
+`ErrorMapper` даёт готовую категорию по HTTP-статусу, коду cURL или исключению — классифицировать сбои заново не нужно.
 
 ## См. также
 
-- [docs/02-providers-and-fallback.md](02-providers-and-fallback.md) — где провайдеры живут в стеке.
-- [docs/10-error-handling.md](10-error-handling.md) — маппинг исключений внутри `OpenAiProvider::doExecute()`.
-- [docs/12-custom-provider.md](12-custom-provider.md) — иной формат API, не только иной транспорт.
-- [docs/architecture.md](architecture.md) — HTTP-слой в контексте.
+- [12-custom-provider.md](12-custom-provider.md) — если нужен не другой транспорт, а другой формат API.
+- [10-error-handling.md](10-error-handling.md) — категории и `ErrorMapper`.

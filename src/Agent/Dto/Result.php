@@ -2,60 +2,80 @@
 
 namespace Hameleon2x\Llm\Agent\Dto;
 
+use Hameleon2x\Llm\Agent\Enum\Finish;
+use Hameleon2x\Llm\Dto\AttemptLog;
 use Hameleon2x\Llm\Dto\Message;
+use Hameleon2x\Llm\Dto\Response;
+use Hameleon2x\Llm\Dto\Usage;
+use Hameleon2x\Llm\Error\ErrorInfo;
 
 /**
- * Результат прогона агентского цикла Runner.
+ * Результат прогона агентского цикла.
+ *
+ * Причина остановки лежит в $finish (Finish::*), сбой — в $error с категорией. Разбирать текст
+ * ответа, чтобы понять, чем кончился прогон, не нужно.
  */
-class Result
+final class Result
 {
     public bool $success;
+
     public ?string $content;
 
-    /** Текст ошибки, когда success = false */
-    public ?string $error;
+    /** Сбой прогона; null, если прогон завершился без ошибки. */
+    public ?ErrorInfo $error;
 
-    /** @var Message[] Полная история диалога после прогона (без system-сообщения) */
+    /** Причина остановки: Finish::*. */
+    public string $finish;
+
+    /** @var Message[] полная история после прогона (без системного сообщения) */
     public array $messages;
 
     public int $turnsUsed;
+
     public int $toolCallsUsed;
 
-    /** Сводная статистика LLM-вызовов за прогон */
     public Usage $usage;
 
+    /** Ключ модели, которая работала последней (после фолбэка отличается от запрошенной). */
+    public string $modelKey = '';
+
+    /** @var AttemptLog[] журнал попыток за весь прогон */
+    public array $attempts = [];
+
+    /** Последний ответ модели: сырой ответ провайдера, extra, finishReason. */
+    public ?Response $lastResponse = null;
+
     /**
-     * Прогон приостановлен: модель вызвала suspend-тулзу, её результат ждёт внешнего ввода
-     * (human-in-the-loop). success=false, content/error=null.
+     * Прогон приостановлен: инструмент ждёт внешнего ввода (human-in-the-loop).
      */
     public bool $suspended = false;
 
-    /** @var string[] id вызовов, чьи результаты нужно предоставить для возобновления (когда suspended=true). */
+    /**
+     * @var string[] id вызовов, чьи результаты нужно предоставить для возобновления
+     */
     public array $pendingToolCallIds = [];
 
     /**
      * @param Message[] $messages
      */
-    public function __construct(
-        bool $success,
-        ?string $content,
-        ?string $error,
-        array $messages,
-        int $turnsUsed,
-        int $toolCallsUsed,
-        ?Usage $usage = null,
-        bool $suspended = false,
-        array $pendingToolCallIds = []
+    private function __construct(
+        bool       $success,
+        ?string    $content,
+        ?ErrorInfo $error,
+        string     $finish,
+        array      $messages,
+        int        $turnsUsed,
+        int        $toolCallsUsed,
+        ?Usage     $usage
     ) {
         $this->success = $success;
         $this->content = $content;
         $this->error = $error;
+        $this->finish = $finish;
         $this->messages = $messages;
         $this->turnsUsed = $turnsUsed;
         $this->toolCallsUsed = $toolCallsUsed;
         $this->usage = $usage ?? new Usage();
-        $this->suspended = $suspended;
-        $this->pendingToolCallIds = $pendingToolCallIds;
     }
 
     /**
@@ -63,42 +83,48 @@ class Result
      */
     public static function success(
         string $content,
-        array $messages,
-        int $turnsUsed,
-        int $toolCallsUsed,
-        ?Usage $usage = null
+        array  $messages,
+        int    $turnsUsed,
+        int    $toolCallsUsed,
+        ?Usage $usage = null,
+        string $finish = Finish::COMPLETED
     ): self {
-        return new self(true, $content, null, $messages, $turnsUsed, $toolCallsUsed, $usage);
+        return new self(true, $content, null, $finish, $messages, $turnsUsed, $toolCallsUsed, $usage);
     }
 
     /**
      * @param Message[] $messages
      */
     public static function error(
-        string $error,
-        array $messages,
-        int $turnsUsed,
-        int $toolCallsUsed,
-        ?Usage $usage = null
+        ErrorInfo $error,
+        array     $messages,
+        int       $turnsUsed,
+        int       $toolCallsUsed,
+        ?Usage    $usage = null,
+        string    $finish = Finish::ERROR
     ): self {
-        return new self(false, null, $error, $messages, $turnsUsed, $toolCallsUsed, $usage);
+        return new self(false, null, $error, $finish, $messages, $turnsUsed, $toolCallsUsed, $usage);
     }
 
     /**
-     * Прогон приостановлен suspend-тулзами: результаты вызовов $pendingToolCallIds будут предоставлены
-     * извне, после чего прогон возобновляется с подставленными tool-сообщениями. Возобновлять можно
-     * только когда закрыты ВСЕ вызовы хода (правило протокола: каждый tool_call требует tool-ответа).
+     * Прогон приостановлен: результаты вызовов $pendingToolCallIds предоставит внешний код, после
+     * чего прогон возобновляется. Возобновлять можно, только когда закрыты ВСЕ вызовы хода —
+     * протокол требует ответа на каждый tool_call.
      *
      * @param string[]  $pendingToolCallIds
      * @param Message[] $messages
      */
     public static function suspended(
-        array $pendingToolCallIds,
-        array $messages,
-        int $turnsUsed,
-        int $toolCallsUsed,
+        array  $pendingToolCallIds,
+        array  $messages,
+        int    $turnsUsed,
+        int    $toolCallsUsed,
         ?Usage $usage = null
     ): self {
-        return new self(false, null, null, $messages, $turnsUsed, $toolCallsUsed, $usage, true, $pendingToolCallIds);
+        $result = new self(false, null, null, Finish::SUSPENDED, $messages, $turnsUsed, $toolCallsUsed, $usage);
+        $result->suspended = true;
+        $result->pendingToolCallIds = $pendingToolCallIds;
+
+        return $result;
     }
 }

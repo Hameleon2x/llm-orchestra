@@ -7,6 +7,47 @@ All notable changes to `hameleon2x/llm-orchestra` are documented here. Format: [
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-24
+
+The unit of choice is now the model, not the provider. Model catalog, one flat fallback chain, typed errors instead of strings, three layers of data in the response. Breaking release with no compatibility layer: `Client` is replaced by `Registry` + `Orchestra`. Migration: [UPGRADING.md](UPGRADING.md).
+
+### Added
+
+- **`Registry` — a catalog of providers and models.** A provider describes transport only (class, token, `baseUrl`, timeout, headers); a model is a catalog key, an API slug (`name`), labels (`fullName`, `description`), generation params, an error policy and aliases. The same model behind two providers is two entries with different keys, so slugs never collide. The catalog is built from an array (`Registry::fromArray()`) or programmatically (`addProvider()`/`addModel()`) and is **validated as a whole at build time**: a missing provider, a typo in the fallback chain or a duplicate alias raises `LlmConfigException` right away instead of at failure time.
+- **`Orchestra` — the executor.** Takes a `Request` and a model key, applies the error policy, keeps an attempt log. It never throws: the result is a `Response` with either `content` or `error`. Copies with overrides: `withPolicy()`, `withFallback()`, `withObserver()`.
+- **One flat fallback chain per catalog.** `fallback` is an ordered list of keys, `maxSwitches` caps the switches per call. The failed model and everything already tried are skipped, so the question "whose continuation list wins" never arises. The policy's `then` (`fallback`/`stop`) is read from the run's starting model.
+- **Typed errors.** `Error\ErrorCategory` (`network`, `timeout`, `empty_response`, `rate_limit`, `server_error`, `invalid_response`, `model_unavailable`, `context_length`, `content_filter`, `auth`, `bad_request`, `deadline`, `config`, `unknown`), `Error\ErrorInfo` (category, HTTP status, provider code, model and provider keys, raw body, `is()`, `isConnectionDrop()`), and `Error\ErrorMapper` — the single place where cURL codes, HTTP statuses and error texts are interpreted; custom providers use it too.
+- **Three layers of response data.** `Response::$metadata` is ours; `Response::extra()` holds provider data normalized to your names via the `capture` map; `Response::raw($path)` gives the whole payload with dot-path access such as `choices.0.message.reasoning_content`. A new provider field no longer requires a library release — one line in `capture` is enough. The built-in map covers `reasoning` (both spellings), `annotations`, `refusal`, `citations`, `system_fingerprint` and the upstream name.
+- **Three levels of arbitrary payload fields and headers:** provider → model → call. Associative arrays merge recursively, lists are replaced wholesale, `null` removes a key. That is how you enable extended thinking on one model, `reasoning_effort` on another and `HTTP-Referer` for a whole provider. `unsupported` strips a parameter the model rejects (`temperature` on reasoning models) no matter who set it.
+- **`Usage` extended:** `cachedTokens`, `reasoningTokens`, the provider's actual `cost` and a `byModel` breakdown — with fallback a single run may involve models with different pricing. Optional catalog `pricing` gives an estimate via `Registry::costOf()` when the provider reports no cost.
+- **`Tool\ToolArgsGuard`** — detects leaked tool-call markup in arguments (`<parameter name=…>`, `<invoke …>`, tags named after parameters). Enabled by default (`Agent\Dto\Config::$toolArgsGuard`), disabled by assigning `null`, extendable with your own patterns. A tool with corrupted arguments is not executed — the model gets an error and re-sends the call.
+- **`Agent\Enum\Finish`** — why the run stopped (`completed`, `tool_limit`, `turns_exhausted`, `deadline`, `error`, `suspended`) in `Agent\Dto\Result::$finish`. Previously outcomes differed only by placeholder text.
+- **`Agent\Dto\Config::$deadlineSeconds`** — a wall-clock limit for the run; on expiry it returns a `deadline` error with the full history intact.
+- **`Event::ATTEMPT_FAILED` and `Event::MODEL_FALLBACK`** — a failed attempt (with "will retry" and the delay) and a model switch. The UI can show retries as they happen instead of reconstructing them afterwards.
+- **`Http\ChatClientInterface` accepts headers and a per-call timeout**, and a custom client is injected through the provider config (`httpClient` — an object or a factory) instead of subclassing the provider.
+- **`Support\SleeperInterface`** — the pause between attempts, replaceable in tests and in web contexts.
+- **Debugging over PSR-3:** `'debug' => true` in the provider config logs the outgoing payload and the raw response at `debug` level (this used to be a constant inside `CurlChatClient`).
+
+### Changed
+
+- **One retry level instead of two.** The transport no longer runs its own loop: retries are governed by the model policy (`retries`, `delay`, `backoff`, `maxDelay`, `perCategory`, `retryOn`, `stopOn`, `maxWaitSeconds`). Waiting time on failure is now predictable. `maxWaitSeconds` stops both retries and switches to further models in the chain; a request already in flight is bounded by the provider's or model's `timeout`.
+- **The error policy is set at three levels and never mixed between them.** A `policy` section exists on a model and on a provider, and the catalog defines `defaultPolicy`. The closest one applies — the model's, then its provider's, then the catalog's — and it applies in full: unset fields take `ErrorPolicy` defaults rather than values from a neighbouring level. So the config shows what governs a given call without working out what overrides what.
+- **An empty turn is an `empty_response` error, not a "success" with a placeholder.** The `Runner` used to return the text "Нет ответа от модели." and callers had to compare strings.
+- **Truncated tool-call arguments** (cut off by the token limit) are reported as `invalid_response` — the tool is not executed on partial data.
+- `Agent\Runner` runs on top of `Orchestra`; the run's model is a catalog key (`Config::$model`), and after a switch the run continues on the model that answered (`Config::$stickyFallback`).
+- `Agent\Dto\Result` carries an `ErrorInfo` instead of an error string, plus the model key, the attempt log and the last `Response`.
+- Generation parameters live in `Config\GenerationParams` (`temperature`, `topP`, `maxTokens`, `seed`) and merge by explicitness: catalog → model → call.
+- `Usage` moved from `Agent\Dto` to `Dto` — it is useful without the agent loop.
+- `Event::ASSISTANT_MESSAGE` meta now carries `extra` (including the model's reasoning), the turn's `usage` and the model key.
+
+### Removed
+
+- `Client` — its role is split between `Registry` (catalog) and `Orchestra` (execution).
+- `Enum\Status` — success is `Response::isSuccess()`, the reason for failure is `ErrorInfo::$category`.
+- `LlmProviderException`, `LlmRateLimitException`, `LlmValidationException` — a failure kind is a category, not an exception class. `LlmException` (carrying `ErrorInfo`) and `LlmConfigException` remain.
+- Provider `priority` and `supportedModels` — order and eligibility are described by the catalog's fallback chain.
+- The dedicated `plugins` field in `Request`/`Config` — it is a special case of `extraParams`.
+
 ## [0.3.0] - 2026-07-03
 
 Tool notes moved out of the system prompt into the tool result — to preserve the provider's prompt cache. Breaking release: `ToolInterface`/`ToolboxInterface` methods renamed, `SystemPromptComposer` removed. Migration: [UPGRADING.md](UPGRADING.md).

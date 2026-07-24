@@ -12,105 +12,122 @@ composer require hameleon2x/llm-orchestra
 
 Требования: PHP 7.4+, `ext-curl`, `ext-json`, `psr/log`.
 
-## Создание клиента
+## Каталог и исполнитель
 
-`Client` — точка входа. Провайдеры перечисляются в `$client->providers` либо как готовые экземпляры `ProviderInterface`, либо — что чаще — как массивы-конфиги с ленивой инициализацией.
+Две точки входа: `Registry` — каталог провайдеров и моделей, `Orchestra` — исполнитель запросов поверх каталога.
 
 ```php
 <?php
 require __DIR__ . '/vendor/autoload.php';
 
-use Hameleon2x\Llm\Client;
+use Hameleon2x\Llm\Orchestra;
 use Hameleon2x\Llm\Provider\OpenAiProvider;
+use Hameleon2x\Llm\Registry;
 
-$client = new Client();
-$client->providers = [
-    ['class' => OpenAiProvider::class, 'token' => 'sk-...', 'model' => 'gpt-4o-mini'],
-];
+$registry = Registry::fromArray([
+    'providers' => [
+        'openai' => ['class' => OpenAiProvider::class, 'token' => 'sk-...'],
+    ],
+    'models' => [
+        'mini' => ['provider' => 'openai', 'name' => 'gpt-4o-mini'],
+    ],
+    'defaultModel' => 'mini',
+]);
+
+$orchestra = new Orchestra($registry);
 ```
 
-`class`, `token`, `model` обязательны; для остального дефолты подставятся автоматически — см. [02-providers-and-fallback.md](02-providers-and-fallback.md).
+Обязательного здесь ровно столько, сколько видно: провайдер знает, куда стучаться и чем авторизоваться, модель — через какого провайдера идти и под каким слагом её знает API. Всё остальное — параметры генерации, политика повторов, цепочка запасных моделей — необязательно и добавляется по мере надобности (см. [02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
+
+Каталог проверяется целиком при сборке: ссылка на несуществующего провайдера, опечатка в цепочке фолбэка или дублирующийся алиас поднимут `LlmConfigException` сразу, а не в момент сбоя в проде.
 
 ## Отправка запроса
 
-`Request::simple($system, $user)` — самый короткий конструктор: одно system-сообщение + одно user-сообщение. Для произвольной истории используй `Request::messages($messages)`; для вызова тулз — `Request::withTools(...)` (обычно через `Agent\Runner`, см. [05-toolbox-and-runner.md](05-toolbox-and-runner.md)).
+`Request::simple($system, $user)` — самый короткий конструктор. Для произвольной истории — `Request::messages($messages)`, для вызова тулз — `Request::withTools(...)` (обычно через [`Agent\Runner`](05-toolbox-and-runner.md)).
 
 ```php
 <?php
 use Hameleon2x\Llm\Dto\Request;
 
-$response = $client->execute(Request::simple(
-    'You are a helpful assistant.',
-    'Explain what PHP is in one sentence.'
+$response = $orchestra->execute(Request::simple(
+    'Ты помощник, отвечающий кратко.',
+    'Объясни, что такое PHP, одним предложением.'
 ));
+```
+
+Второй аргумент `execute()` — ключ модели из каталога. Опущен — берётся `defaultModel`:
+
+```php
+$response = $orchestra->execute($request, 'mini');
 ```
 
 ## Чтение ответа
 
-Перед чтением `content` всегда проверяй `isSuccess()` — при ошибке `content` равен `null`, а текст ошибки лежит в `error`.
+Успех — это отсутствие ошибки. При сбое `content` равен `null`, а в `error` лежит разобранная ошибка с категорией.
 
 ```php
 <?php
 if ($response->isSuccess()) {
     echo $response->content;
 } else {
-    fwrite(STDERR, "LLM failed: {$response->error}\n");
+    fwrite(STDERR, "LLM failed: {$response->error->category} — {$response->error->message}\n");
 }
 ```
 
-### Поверхность `Response`
-
-| Свойство / метод                                                               | Значение                                                               |
-|--------------------------------------------------------------------------------|------------------------------------------------------------------------|
-| `$response->status`                                                            | Константа из `Hameleon2x\Llm\Enum\Status`: `SUCCESS`, `RATE_LIMIT`, `PROVIDER_ERROR`, `VALIDATION_ERROR`, `TIMEOUT`, `ERROR`. |
-| `$response->isSuccess()`                                                       | Сокращение для `$status === Status::SUCCESS`.                          |
-| `$response->content`                                                           | Текст ассистента. `null` при ошибке или если вернулись только вызовы тулз. |
-| `$response->toolCalls`, `$response->hasToolCalls()`                            | `ToolCall[]` от модели.                                                |
-| `$response->provider`, `$response->model`                                      | Какой провайдер/модель в итоге ответили.                               |
-| `$response->error`                                                             | Строка ошибки, если `status !== SUCCESS`.                              |
-| `getPromptTokens()`, `getCompletionTokens()`, `getTotalTokens()`               | Количество токенов из блока `usage` провайдера.                        |
-| `getLatency()`                                                                 | Время в секундах внутри вызова провайдера (wall-clock).                |
-| `$response->metadata`                                                          | Сырая мапа: `promptTokens`, `completionTokens`, `totalTokens`, `finishReason`, `latency`, `attempts`. |
-
-## Второй провайдер: OpenRouter
-
-OpenRouter и Requesty — drop-in замена: та же OpenAI-совместимая API, отличаются только базовые URL и каталоги моделей. Класс провайдера подставляет правильный `baseUrl` сам; переопределяй его только если работаешь через прокси.
+### Что ещё есть в ответе
 
 ```php
-<?php
-use Hameleon2x\Llm\Provider\OpenRouterProvider;
+$response->content;        // текст ответа; null при сбое или если пришли только вызовы инструментов
+$response->toolCalls;      // ToolCall[] — что модель попросила вызвать
+$response->usage;          // токены, кеш, размышления, стоимость
+$response->modelKey;       // ключ модели каталога, которая ответила
+$response->modelName;      // её слаг для API
+$response->providerKey;    // через какой транспорт прошёл запрос
+$response->attempts;       // журнал попыток: повторы и переключения моделей
+$response->error;          // ErrorInfo с категорией сбоя; null при успехе
 
-$client = new Client();
-$client->providers = [
-    ['class' => OpenRouterProvider::class, 'token' => 'sk-or-...', 'model' => 'anthropic/claude-3.5-sonnet'],
+$response->extra('reasoning');                  // размышления модели, если она их вернула
+$response->raw('choices.0.finish_reason');      // любое поле сырого ответа по пути
+$response->finishReason();                      // stop, length, tool_calls…
+$response->isTruncated();                       // ответ обрезан лимитом токенов
+```
 
-    // To use a proxy / self-hosted gateway, add:
-    // 'baseUrl' => 'https://my-proxy.example.com/openrouter',
-];
+`modelKey` стоит запомнить: если при сбое сработало переключение на запасную модель, ответ придёт не от той, что вы запрашивали, и увидеть это можно только здесь. Подробности — [10-error-handling.md](10-error-handling.md) и [09-usage-and-limits.md](09-usage-and-limits.md).
 
-$response = $client->execute(Request::simple('You are concise.', 'Name 3 PHP frameworks.'));
-echo $response->content;
+## Параметры генерации
+
+Задаются на трёх уровнях и сливаются по явности: каталог → модель → вызов.
+
+```php
+$request = Request::simple($system, $user)
+    ->setTemperature(0.2)
+    ->setMaxTokens(2000);
+```
+
+То же самое, но для всех запросов модели, — в каталоге:
+
+```php
+'models' => [
+    'mini' => [
+        'provider' => 'openai',
+        'name'     => 'gpt-4o-mini',
+        'params'   => ['temperature' => 0.2, 'maxTokens' => 2000],
+    ],
+],
 ```
 
 ## Провайдер-специфичные поля payload
 
-Некоторые провайдеры принимают дополнительные поля payload вне OpenAI-совместимого ядра — например, OpenRouter понимает `session_id` (группирует связанные запросы в их дашборде для observability беседы/агента; максимум 256 символов). OpenAI принимает `user` (идентификатор конечного пользователя для abuse-трекинга). Отдельного сеттера на каждое такое поле в библиотеке нет — передавай их через `setExtraParams()`:
+Всё, для чего нет отдельного параметра, задаётся как дополнительные поля payload — на уровне провайдера, модели или вызова:
 
 ```php
-<?php
-$request = Request::simple('You are concise.', 'Summarize PHP in one line.')
-    ->setExtraParams([
-        'session_id' => 'agent_42_run_17', // OpenRouter — группирует запросы в одну сессию
-        // 'user' => 'user-1234',          // OpenAI — идентификатор конечного пользователя
-    ]);
-
-$response = $client->execute($request);
+$request->setExtraParams(['session_id' => 'run_42']);
 ```
 
-`extraParams` сливаются в payload внутри `OpenAiProvider`. Стандартные ключи (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) всегда выигрывают — переопределить их таким способом нельзя. Поля, которые конкретный провайдер не понимает, обычно игнорируются на стороне сервера; перед тем как закладываться на конкретный ключ — сверься с документацией нужного провайдера.
+Стандартные поля (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`) через `extraParams` перезаписать нельзя — для них есть параметры генерации.
 
-## См. также
+## Что дальше
 
-- [02-providers-and-fallback.md](02-providers-and-fallback.md) — несколько провайдеров, порядок fallback, повторы.
-- [03-logging.md](03-logging.md) — как ловить события повторов и переходов между провайдерами.
-- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — многошаговые диалоги с вызовом тулз.
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — каталог целиком: политика повторов, цепочка запасных моделей, режимы моделей.
+- [10-error-handling.md](10-error-handling.md) — категории ошибок и что с ними делать.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — агентский цикл с тулзами.

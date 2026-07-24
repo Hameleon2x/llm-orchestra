@@ -1,89 +1,100 @@
 **Язык:** [English](../09-usage-and-limits.md) · **Русский**
 
-# Учёт расхода и стоимость
+# Потребление и лимиты
 
-Как счётчики токенов агрегируются за один прогон агента и как превратить их в деньги.
+Сколько токенов и денег стоил вызов, и какими границами ограничен прогон.
 
-## DTO `Usage`
-
-Каждый вызов `Runner::run()` возвращает [`Result`](../../src/Agent/Dto/Result.php), у которого поле `$usage` — [`Usage`](../../src/Agent/Dto/Usage.php):
-
-| Поле               | Тип    | Значение                                                                |
-|--------------------|--------|-------------------------------------------------------------------------|
-| `llmCalls`         | `int`  | Количество запросов к LLM за прогон (включая «подталкивание» при лимите). |
-| `promptTokens`     | `int`  | Сумма `prompt_tokens` по всем ответам.                                  |
-| `completionTokens` | `int`  | Сумма `completion_tokens` по всем ответам.                              |
-| `totalTokens`      | `int`  | Сумма `total_tokens` по всем ответам.                                   |
-
-`Usage::add(Response $r)` вызывает `Runner` для каждого ответа — успешного или нет. Провайдеры отдают метаданные расхода и на неудачных ответах (или нули, если не отдают), так что счётчики отражают всё, что прошло по сети.
-
-## Что попадает в счётчики
-
-- Каждый обычный ход — да.
-- Дополнительный вызов «завершить без тулз», срабатывающий при упоре в `maxToolCalls`, — да.
-- Ответы, пришедшие как ошибки, но с метаданными `usage`, — да (добавляются как есть).
-- Локальные fallback'и провайдеров (когда провайдер бросает исключение и `Client` переходит к следующему) — нет: они не дают `Response::success(...)`, и `Runner` всё равно прерывается на первом же неудачном ответе (см. [docs/10-error-handling.md](10-error-handling.md)).
-
-## Чтение usage после прогона
+## Токены одного ответа
 
 ```php
-<?php
-use Hameleon2x\Llm\Agent\Runner;
-use Psr\Log\LoggerInterface;
+$response = $orchestra->execute(Request::simple('Отвечай кратко.', 'Что такое PHP?'));
 
-/** @var Runner $runner */
-/** @var LoggerInterface $logger */
+echo $response->usage->promptTokens;      // токены запроса
+echo $response->usage->completionTokens;  // токены ответа
+echo $response->usage->totalTokens;       // сумма
+```
+
+Кроме трёх основных счётчиков `Dto\Usage` хранит то, что провайдеры отдают всё чаще:
+
+- **`cachedTokens`** — часть промпта, обслуженная из кеша провайдера. Такие токены обычно дешевле обычных.
+- **`reasoningTokens`** — токены размышлений у reasoning-моделей. Они уже входят в `completionTokens`, это уточнение, а не добавка.
+- **`cost`** — фактическая стоимость в долларах, если провайдер её прислал. Шлюзы вроде OpenRouter и Requesty это делают, прямые API — обычно нет.
+- **`calls`** — сколько вызовов модели учтено. У одного ответа это `1`, у прогона — сколько было обращений.
+
+## Токены прогона
+
+`Agent\Dto\Result::$usage` — тот же объект, но просуммированный по всем обращениям к модели за прогон:
+
+```php
 $result = $runner->run($messages, $toolbox, $systemPromptFn, $config);
 
-$logger->info('agent run finished', [
-    'success'           => $result->success,
-    'turns_used'        => $result->turnsUsed,
-    'tool_calls_used'   => $result->toolCallsUsed,
-    'llm_calls'         => $result->usage->llmCalls,
-    'prompt_tokens'     => $result->usage->promptTokens,
-    'completion_tokens' => $result->usage->completionTokens,
-    'total_tokens'      => $result->usage->totalTokens,
-]);
+echo $result->usage->calls;         // сколько раз обращались к модели
+echo $result->usage->totalTokens;   // сколько токенов потратили всего
+echo $result->usage->cost;          // null, если провайдер стоимость не отдаёт
 ```
 
-Для одиночного вызова `Client::execute()` (без агентского цикла) те же числа читаются из `Response`:
+В сумму входят все обороты цикла и дополнительный запрос, который делается при исчерпании лимита вызовов инструментов. Не входят: неудачные попытки (при сбое провайдер блок `usage` не присылает) и под-прогоны, которые вы запускаете из своих инструментов — у них свой `Result` и свой `Usage`.
+
+### Разбивка по моделям
+
+Если при сбое сработало переключение на запасную модель, в одном прогоне поработали две модели с разной ценой. Общая сумма токенов тогда ничего не говорит о стоимости, поэтому есть разбивка:
 
 ```php
-$response->getPromptTokens();
-$response->getCompletionTokens();
-$response->getTotalTokens();
-$response->getLatency();           // seconds, set by BaseProvider
-$response->metadata['finishReason'] ?? null;
+foreach ($result->usage->byModel as $modelKey => $usage) {
+    printf("%s: %d токенов\n", $modelKey, $usage->totalTokens);
+}
+// glm-4.6:   1200 токенов
+// mimo-2.5:  3400 токенов
 ```
 
-## Расчёт стоимости
-
-Встроенного калькулятора цен в пакете нет — цены меняются слишком часто и зависят от провайдера. Шаблон:
+Для логов удобен `toArray()` — он отдаёт только заполненные поля:
 
 ```php
-<?php
-// Pricing taken from the provider docs (USD per 1M tokens, example values).
-$prices = [
-    'gpt-4o-mini' => ['prompt' => 0.150, 'completion' => 0.600],
-    'gpt-4o'      => ['prompt' => 2.500, 'completion' => 10.000],
-];
-
-$p    = $prices[$model] ?? null;
-$cost = $p === null
-    ? 0.0
-    : ($result->usage->promptTokens     / 1_000_000) * $p['prompt']
-    + ($result->usage->completionTokens / 1_000_000) * $p['completion'];
+$logger->info('LLM run', $result->usage->toArray());
 ```
 
-Если нужно в нескольких местах — заверните в свой `CostCalculator` на стороне приложения.
+## Стоимость
 
-## Оговорки
+Точнее всего — `Usage::$cost` от провайдера. Когда его нет, стоимость можно оценить по ценам каталога. Цены необязательны и указываются за миллион токенов:
 
-- `Usage` **не** отслеживает, какая модель сгенерировала каждый вызов. Если в вашем прогоне возможен fallback между провайдерами с разными ценами — логируйте метаданные по каждому ответу самостоятельно.
-- Числа идут напрямую от провайдера. Попадания в кэш, скидки за prompt caching и подобное отражаются, только если провайдер передаёт их в `usage`.
+```php
+'models' => [
+    'gpt-5' => [
+        'provider' => 'openai',
+        'name'     => 'gpt-5',
+        'pricing'  => ['in' => 1.25, 'out' => 10.0],
+    ],
+],
+```
+
+```php
+$estimate = $registry->costOf('gpt-5', $usage->promptTokens, $usage->completionTokens);
+// null, если pricing у модели не задан
+```
+
+## Лимиты прогона
+
+Четыре ограничителя, каждый со своим смыслом:
+
+- **`Config::$maxTurns`** — сколько раз можно обратиться к модели. При исчерпании прогон возвращает `Finish::TURNS_EXHAUSTED` и текст `turnsExhaustedText` в `$content`.
+- **`Config::$maxToolCalls`** — сколько инструментов можно исполнить. При исчерпании делается ещё один запрос без инструментов, чтобы модель подвела итог по собранным данным; результат помечается `Finish::TOOL_LIMIT`.
+- **`Config::$deadlineSeconds`** — предельная длительность прогона. Проверяется перед каждым оборотом; при истечении возвращается ошибка категории `deadline` вместе с полной историей.
+- **`ErrorPolicy::$maxWaitSeconds`** — сколько суммарно можно ждать на повторах одного вызова. При исчерпании повторы прекращаются и возвращается последняя ошибка.
+
+Первые три задаются в конфиге прогона ([08-config-reference.md](08-config-reference.md)), последний — в политике ошибок ([02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
+
+Полезное правило: держите `maxTurns` заметно выше `maxToolCalls`. Тогда первым сработает лимит вызовов, и прогон закончится осмысленным ответом модели, а не служебной заглушкой об исчерпании оборотов.
+
+## Счётчики после прогона
+
+```php
+$result->turnsUsed;        // сколько оборотов сделано
+$result->toolCallsUsed;    // сколько инструментов исполнено
+$result->finish;           // почему цикл остановился
+count($result->attempts);  // сколько было попыток вызова модели, включая повторы
+```
 
 ## См. также
 
-- [docs/05-toolbox-and-runner.md](05-toolbox-and-runner.md) — где заполняется `Usage`.
-- [docs/08-config-reference.md](08-config-reference.md) — лимиты, ограничивающие прогон.
-- [docs/10-error-handling.md](10-error-handling.md) — режимы отказа и как ведёт себя usage при ошибках.
+- [08-config-reference.md](08-config-reference.md) — где задаются лимиты прогона.
+- [10-error-handling.md](10-error-handling.md) — журнал попыток и категории ошибок.

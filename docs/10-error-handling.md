@@ -1,96 +1,173 @@
 **Language:** **English** · [Русский](ru/10-error-handling.md)
 
-# Error handling
+# Errors, retries, and backup models
 
-How failures propagate through the stack, when retries happen, and what your code has to check.
+The network drops, a provider answers with 429, a model stays silent. The library takes care of retries and switching to a backup model, and hands you back a result that shows exactly what happened.
 
-## Exception hierarchy
+## Checking for an error
 
-All package exceptions extend [`LlmException`](../src/Exception/LlmException.php), which carries a `$retryable` flag:
-
-| Class                       | Typical cause                                  | `code` | `retryable` |
-|-----------------------------|------------------------------------------------|--------|-------------|
-| `LlmException`              | base                                           | —      | flag        |
-| `LlmProviderException`      | timeout, 5xx, malformed JSON                   | varies | `true`*     |
-| `LlmRateLimitException`     | HTTP 429                                       | `429`  | `true`      |
-| `LlmValidationException`    | HTTP 400, 401, 403, 404 …                      | code   | `false`     |
-
-\* `LlmProviderException` is constructed with `retryable=true` by default; `OpenAiProvider` sets it to `false` for `cURL error 56` (receive failure from peer), since those have proved fatal in practice.
-
-## What Client and Runner promise
-
-[`Client::execute()`](../src/Client.php) **does not throw**. It catches `LlmException` and any `Throwable` from every provider, logs it (PSR-3), and either moves on to the next provider in the fallback chain, or returns a [`Response`](../src/Dto/Response.php) built via `Response::error(...)` if every provider failed.
-
-[`Runner::run()`](../src/Agent/Runner.php) also **does not throw**. If `Client::execute()` returns a non-success response on any turn, `Runner` stops and returns `Result::error(...)`. Anything that escapes `ToolboxInterface::execute()` bubbles up through `Runner` as a regular PHP exception — that is on you.
-
-Caller code only needs `if (!$response->isSuccess())` / `if (!$result->success)`.
-
-## How the fallback chain reacts
-
-For each provider in priority order, `Client`:
-
-1. calls `$provider->execute($request)` (already wraps `BaseProvider`'s retry loop);
-2. on success — returns the response;
-3. on unsuccessful `Response` — logs `warning`, remembers it, tries the next provider;
-4. on `LlmException` — logs `warning`, tries the next provider;
-5. on any other `Throwable` — logs `error` with the stack trace, tries the next provider.
-
-When the loop ends with no success, `Client` returns the last unsuccessful response (or a synthetic `Status::ERROR` if every provider threw).
-
-## Provider retry loop
-
-[`BaseProvider::execute()`](../src/Provider/BaseProvider.php) wraps `doExecute()` in a retry loop driven by `$retryAttempts` (default `3`): on retryable `LlmException` — sleep, then retry; on non-retryable — give up immediately. Backoff is **exponential with a 10-second cap**: 1s → 2s → 4s → 8s → 10s → 10s → …
-
-After all attempts are spent, `BaseProvider` maps the last exception to a `Status` via `getStatusFromException()` (`RateLimit*` → `RATE_LIMIT`, `Validation*` → `VALIDATION_ERROR`, `Provider*` → `PROVIDER_ERROR`, `Timeout*` → `TIMEOUT`, otherwise `ERROR`).
-
-## Response statuses
-
-[`Status`](../src/Enum/Status.php) values that can appear on a returned `Response`:
-
-| Constant            | Value                | When                                                |
-|---------------------|----------------------|-----------------------------------------------------|
-| `SUCCESS`           | `'success'`          | request completed normally                          |
-| `PROVIDER_ERROR`    | `'provider_error'`   | 5xx, malformed response, generic network failure    |
-| `RATE_LIMIT`        | `'rate_limit'`       | HTTP 429                                            |
-| `VALIDATION_ERROR`  | `'validation_error'` | HTTP 4xx (except 429)                               |
-| `TIMEOUT`           | `'timeout'`          | reserved for timeout-shaped exceptions              |
-| `ERROR`             | `'error'`            | catch-all                                           |
-
-## Inspecting a failed response
+Neither `Orchestra` nor `Runner` throws exceptions. Success means the absence of an error:
 
 ```php
-<?php
-use Hameleon2x\Llm\Enum\Status;
+$response = $orchestra->execute(Request::simple('Answer briefly.', 'What is PHP?'));
 
-/** @var \Hameleon2x\Llm\Dto\Response $response */
 if ($response->isSuccess()) {
     echo $response->content;
-    return;
+} else {
+    echo 'Failed: ' . $response->error->category;   // e.g., timeout
 }
-
-switch ($response->status) {
-    case Status::RATE_LIMIT:        // back off; user-facing "try again later"
-    case Status::VALIDATION_ERROR:  // bug in our request — do not retry, raise an alert
-    case Status::PROVIDER_ERROR:
-    case Status::TIMEOUT:
-    case Status::ERROR:
-    default:
-        // every provider failed in the fallback chain
-}
-
-$errorMessage = $response->error;
-$rootCause    = $response->exception;  // ?Throwable, original exception if any
-$provider     = $response->provider;   // name of the provider that surfaced the error
 ```
 
-For agent runs, the same status is condensed into `Result::$error` (string). `Result` does not carry the underlying `Response::$exception` — log it from your provider configuration if you need it.
+The main rule: **never parse the error text**. Provider wording changes without notice, so every failure is mapped to a category, and decisions are made from that category:
 
-## Tool execution errors
+```php
+use Hameleon2x\Llm\Error\ErrorCategory;
 
-Tool failures are **not** exceptions in this design. Return `Tool\Dto\Result::error('...')` and `Runner` will serialise it to a `tool` message as `{"error": "..."}`. The model sees it on the next turn and can react. Throwing inside `Toolbox::execute()` bubbles out of `Runner::run()` unchanged.
+$error = $response->error;
+
+if ($error->isConnectionDrop()) {
+    // network, timeout, or an empty turn — no data lost, safe to retry later
+}
+
+if ($error->is(ErrorCategory::RATE_LIMIT)) {
+    // the provider is asking you to wait
+}
+
+if ($error->is(ErrorCategory::CONTEXT_LENGTH, ErrorCategory::BAD_REQUEST)) {
+    // fixable only by changing the request
+}
+```
+
+The same applies to the agent loop:
+
+```php
+$result = $runner->run($messages, $toolbox, $systemPromptFn, $config);
+
+if (!$result->success && $result->error !== null) {
+    echo $result->error->category;
+}
+```
+
+## What's inside the error
+
+```php
+$error->category;        // ErrorCategory::TIMEOUT — what decisions are based on
+$error->message;         // technical message: for the log, not the UI
+$error->httpStatus;      // 429, 500… or null if the failure isn't HTTP
+$error->providerCode;    // the provider's machine code, if it sent one
+$error->modelKey;        // which catalog model the failure happened on
+$error->providerKey;     // through which transport
+$error->raw;             // the provider's response body in full
+$error->exception;       // ?Throwable, if the failure arrived as an exception
+
+$logger->warning('LLM failed', $error->toArray());   // compact, without the raw body
+```
+
+The library doesn't impose user-facing text: that depends on the application. Usually it's your own "category → phrase" map.
+
+## Categories
+
+The category determines both whether we retry the request with the same model and whether we hand the work over to the next model in the chain.
+
+| Category            | Retry | Backup model | When it occurs                                  |
+|---------------------|-------|---------------|--------------------------------------------------|
+| `NETWORK`           | yes   | yes           | dropped connection, DNS, cURL 6/7/35/52/56        |
+| `TIMEOUT`           | yes   | yes           | request timeout expired (cURL 28, HTTP 408)       |
+| `EMPTY_RESPONSE`    | yes   | yes           | a turn with no text and no tool calls             |
+| `RATE_LIMIT`        | yes   | yes           | HTTP 429                                          |
+| `SERVER_ERROR`      | yes   | yes           | HTTP 5xx                                          |
+| `INVALID_RESPONSE`  | yes   | yes           | broken JSON, truncated call arguments             |
+| `MODEL_UNAVAILABLE` | no    | yes           | no such model, retired, overloaded (404)          |
+| `CONTEXT_LENGTH`    | no    | yes           | the request doesn't fit the context window        |
+| `AUTH`              | no    | yes           | HTTP 401/403 — another provider has its own key   |
+| `CONTENT_FILTER`    | no    | no            | blocked by moderation                             |
+| `BAD_REQUEST`       | no    | no            | HTTP 400/422 — the request itself is wrong        |
+| `DEADLINE`          | no    | no            | the run's deadline expired                        |
+| `CONFIG`            | no    | no            | catalog error                                     |
+| `UNKNOWN`           | yes   | yes           | none of the above                                 |
+
+The logic is simple: retry whatever might succeed on a second attempt; switch models when the problem is with a specific model or key; stop when the request itself is wrong.
+
+The default behavior is overridden by the policy — `retryOn`, `stopOn`, `then` — see [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
+
+## Order of actions on failure
+
+1. The model the caller picked is retried per its own policy: pause, then retry; a longer pause, then retry again.
+2. Retries run out — the **starting** model's policy decides: stop, or hand the work over further.
+3. The next model in the chain works under its own policy. Models already tried are skipped, and the number of switches is capped by `maxSwitches`.
+4. The chain is exhausted — the last error is returned.
+
+Example trace when `gpt-5` is chosen and the chain holds `glm` and `mimo`. The default policy is `retries = 2`, so up to three attempts per model:
+
+```
+gpt-5   attempt 1 → timeout
+gpt-5   attempt 2 (5s pause)  → empty_response
+gpt-5   attempt 3 (10s pause) → timeout
+glm     attempt 1 → server_error           ← switch
+glm     attempt 2 (5s pause)  → success ✓
+```
+
+The response comes from `glm`, and `$response->modelKey` equals `glm` — that's how you see who actually answered.
+
+## Attempt log
+
+Every attempt lands in the response's log:
+
+```php
+foreach ($response->attempts as $attempt) {
+    printf(
+        "%s attempt %d: %s\n",
+        $attempt->modelKey,
+        $attempt->attempt,
+        $attempt->success ? 'success' : $attempt->error->category
+    );
+}
+```
+
+An attempt also carries `latency` (how long it took), `delayBefore` (the pause before it), `willRetry` (whether it will be retried), and `nextDelay` (after how long).
+
+The log is available after the call. If you need to show what's happening right away, subscribe to attempts:
+
+```php
+$orchestra = $orchestra->withObserver(function (AttemptLog $attempt): void {
+    if (!$attempt->success && $attempt->willRetry) {
+        echo "Retrying in {$attempt->nextDelay}s ({$attempt->error->category})\n";
+    }
+});
+```
+
+In the agent loop, the same thing arrives as `Event::ATTEMPT_FAILED` and `Event::MODEL_FALLBACK` events — see [06-events.md](06-events.md).
+
+## Empty and truncated responses
+
+- A turn with no text and no tool calls is an `EMPTY_RESPONSE` failure. It happens on a connection drop and is fixed by a retry.
+- A tool call whose arguments don't parse (the response was cut off by the token limit) is `INVALID_RESPONSE`. The tool is not executed on incomplete data.
+- A response truncated by the token limit but still meaningful is not treated as an error. Check with `$response->isTruncated()` or `$response->finishReason() === 'length'`.
+
+## Exceptions
+
+There are two of them, and both rarely reach application code.
+
+`LlmException` carries an `ErrorInfo` and lives inside providers: `Orchestra` catches it, records the attempt, and decides what to do next.
+
+`LlmConfigException` is raised while building the catalog and when referring to an unknown model — that is, while the mistake can still be fixed in the config. It's worth catching at application startup to show a clear message.
+
+If you're writing your own provider, the easiest way to get a category is through `ErrorMapper`:
+
+```php
+use Hameleon2x\Llm\Error\ErrorMapper;
+
+throw new LlmException(ErrorMapper::fromHttpStatus($status, $body, $decoded));
+throw new LlmException(ErrorMapper::fromCurl($errno, $message));
+throw LlmException::of(ErrorCategory::EMPTY_RESPONSE, 'The model returned nothing.');
+```
+
+## Tool errors
+
+A tool failure is not treated as a call error: return `Tool\Dto\Result::error('...')`, and the model will see `{"error": "..."}` in the tool result, and the loop continues. More details — [04-tools.md](04-tools.md).
 
 ## See also
 
-- [docs/02-providers-and-fallback.md](02-providers-and-fallback.md) — provider priority and fallback semantics.
-- [docs/03-logging.md](03-logging.md) — PSR-3 messages emitted by `Client` and `BaseProvider`.
-- [docs/12-custom-provider.md](12-custom-provider.md) — which exception to throw from your own `doExecute()`.
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — retry policy and the chain of backup models.
+- [06-events.md](06-events.md) — retries and switches in the agent loop.
+- [12-custom-provider.md](12-custom-provider.md) — which errors to throw from your own provider.

@@ -2,108 +2,168 @@
 
 # Custom HTTP client
 
-How to replace the cURL transport used by [`OpenAiProvider`](../src/Provider/OpenAiProvider.php) and its descendants — for tests, for Guzzle / Symfony HttpClient, or for adding middleware.
+By default requests go through `Http\CurlChatClient` — an `ext-curl` implementation with no external dependencies. Replace the transport when you need your application's HTTP client (PSR-18, Guzzle), a corporate proxy, or recorded fixtures in tests.
 
-## The contract
-
-[`ChatClientInterface`](../src/Http/ChatClientInterface.php) is one method: `chat(array $params): string` — POST `/v1/chat/completions` with `$params` as the JSON body, return the raw response body (JSON string). Throw any `Throwable` on network failure or non-2xx.
-
-The default implementation is [`CurlChatClient`](../src/Http/CurlChatClient.php) — `ext-curl` only, no external dependencies. `OpenAiProvider::getClient()` constructs it lazily on the first request.
-
-Reasons to swap it: unit tests (canned JSON), a different HTTP stack (Guzzle, Symfony HttpClient), middleware (logging, caching, HTTP-level retries).
-
-## How to install your own client
-
-`OpenAiProvider` has no public `setClient()` setter — `$client` is `protected` and lazily initialised in `getClient()`. To inject your own implementation, subclass and override `getClient()`:
+## Interface
 
 ```php
-<?php
-use Hameleon2x\Llm\Http\ChatClientInterface;
-use Hameleon2x\Llm\Provider\OpenAiProvider;
-
-class TestableOpenAiProvider extends OpenAiProvider
+interface ChatClientInterface
 {
-    private ChatClientInterface $injected;
-    public function setChatClient(ChatClientInterface $c): void { $this->injected = $c; }
-    protected function getClient(): ChatClientInterface         { return $this->injected; }
+    /**
+     * @param array                 $payload request body
+     * @param array<string, string> $headers extra headers on top of the mandatory ones
+     * @param int|null              $timeout request timeout in seconds; null — the client's own timeout
+     * @return string raw response body
+     * @throws LlmException on transport failure or a response with an error code
+     */
+    public function chat(array $payload, array $headers = [], ?int $timeout = null): string;
 }
 ```
 
-> A public `setClient(ChatClientInterface)` on `OpenAiProvider` would remove the need for a subclass. On the wishlist as a backwards-compatible enhancement.
+The client is responsible only for sending the request and mapping transport failures to `LlmException`. Parsing the response, retries, and model switching are not its job.
 
-## Example: fake client for unit tests
+## Wiring
+
+A ready-made object or a factory is specified in the provider config:
+
+```php
+'providers' => [
+    'openai' => [
+        'class'      => OpenAiProvider::class,
+        'token'      => 'sk-...',
+        'httpClient' => $myClient,                                   // an object
+    ],
+    'openrouter' => [
+        'class'      => OpenRouterProvider::class,
+        'token'      => 'sk-or-...',
+        'httpClient' => fn(ProviderDefinition $def) => new MyClient($def->token, $def->baseUrl),
+    ],
+],
+```
+
+The factory receives a `ProviderDefinition` — that's where the token, `baseUrl`, timeout, and the `debug` flag come from.
+
+## Let's start simple: a client for tests
+
+The most common reason to replace the transport is testing. The client hands back pre-prepared responses and remembers what it was asked for:
 
 ```php
 <?php
+
 use Hameleon2x\Llm\Http\ChatClientInterface;
 
 final class FakeChatClient implements ChatClientInterface
 {
-    /** @var string[] */ private array $responses;
-    /** @var array<int, array> */ public array $sentParams = [];
+    /** @var string[] queued responses */
+    private array $queue;
 
-    public function __construct(array $responses) { $this->responses = $responses; }
+    /** @var array[] what was sent */
+    public array $sent = [];
 
-    public function chat(array $params): string
+    public function __construct(array $queue)
     {
-        $this->sentParams[] = $params;
-        if ($this->responses === []) {
-            throw new \RuntimeException('FakeChatClient: no more canned responses');
-        }
-        return array_shift($this->responses);
+        $this->queue = $queue;
+    }
+
+    public function chat(array $payload, array $headers = [], ?int $timeout = null): string
+    {
+        $this->sent[] = ['payload' => $payload, 'headers' => $headers];
+
+        return array_shift($this->queue) ?? '{}';
     }
 }
-
-// Wire-up: build a canned chat-completions JSON, inject through the subclass,
-// then call $client->execute() and assert on $response->content / $fake->sentParams.
-$fake = new FakeChatClient([json_encode([
-    'model'   => 'gpt-4o-mini',
-    'choices' => [['message' => ['role' => 'assistant', 'content' => 'pong'], 'finish_reason' => 'stop']],
-    'usage'   => ['prompt_tokens' => 4, 'completion_tokens' => 1, 'total_tokens' => 5],
-])]);
-$provider = new TestableOpenAiProvider('test-token', 'gpt-4o-mini');
-$provider->setChatClient($fake);
 ```
 
-## Example: Guzzle-backed client
+It's wired in the same way as any other client:
+
+```php
+$registry = Registry::fromArray([
+    'providers' => [
+        'test' => ['class' => OpenAiProvider::class, 'httpClient' => new FakeChatClient([$json1, $json2])],
+    ],
+    'models' => ['m' => ['provider' => 'test', 'name' => 'test-model']],
+]);
+```
+
+Together with `Support\SleeperInterface` (a no-op pause instead of `usleep`), this lets you run retry and model-switching scenarios instantly:
+
+```php
+$orchestra = new Orchestra($registry, null, new class implements SleeperInterface {
+    public function sleep(float $seconds): void {}
+});
+```
+
+## Example: PSR-18
 
 ```php
 <?php
-use GuzzleHttp\ClientInterface;
+
+use Hameleon2x\Llm\Error\ErrorMapper;
+use Hameleon2x\Llm\Exception\LlmException;
 use Hameleon2x\Llm\Http\ChatClientInterface;
+use Psr\Http\Client\ClientExceptionInterface;
+use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\RequestFactoryInterface;
+use Psr\Http\Message\StreamFactoryInterface;
 
-final class GuzzleChatClient implements ChatClientInterface
+final class Psr18ChatClient implements ChatClientInterface
 {
-    private ClientInterface $http; private string $token; private string $baseUrl;
-    public function __construct(ClientInterface $http, string $token, string $baseUrl = 'https://api.openai.com')
-    { $this->http = $http; $this->token = $token; $this->baseUrl = $baseUrl; }
+    private ClientInterface $client;
+    private RequestFactoryInterface $requests;
+    private StreamFactoryInterface $streams;
+    private string $url;
+    private string $token;
 
-    public function chat(array $params): string
+    public function __construct(
+        ClientInterface $client,
+        RequestFactoryInterface $requests,
+        StreamFactoryInterface $streams,
+        string $baseUrl,
+        string $token
+    ) {
+        $this->client = $client;
+        $this->requests = $requests;
+        $this->streams = $streams;
+        $this->url = rtrim($baseUrl, '/') . '/v1/chat/completions';
+        $this->token = $token;
+    }
+
+    public function chat(array $payload, array $headers = [], ?int $timeout = null): string
     {
-        $params['stream'] = false;
-        $resp = $this->http->request('POST', rtrim($this->baseUrl, '/') . '/v1/chat/completions', [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $this->token,
-                'Content-Type'  => 'application/json',
-                'Accept'        => 'application/json',
-            ],
-            'body'        => json_encode($params, JSON_UNESCAPED_UNICODE),
-            'http_errors' => true,  // Guzzle throws on non-2xx — that's the contract
-        ]);
-        return (string)$resp->getBody();
+        $payload['stream'] = false;
+
+        $request = $this->requests->createRequest('POST', $this->url)
+            ->withHeader('Content-Type', 'application/json')
+            ->withHeader('Accept', 'application/json')
+            ->withHeader('Authorization', 'Bearer ' . $this->token)
+            ->withBody($this->streams->createStream(json_encode($payload, JSON_UNESCAPED_UNICODE)));
+
+        foreach ($headers as $name => $value) {
+            $request = $request->withHeader((string)$name, (string)$value);
+        }
+
+        try {
+            $response = $this->client->sendRequest($request);
+        } catch (ClientExceptionInterface $e) {
+            throw new LlmException(ErrorMapper::fromThrowable($e), $e);
+        }
+
+        $body = (string)$response->getBody();
+        $status = $response->getStatusCode();
+
+        if ($status >= 400) {
+            $decoded = json_decode($body, true);
+            throw new LlmException(ErrorMapper::fromHttpStatus($status, $body, is_array($decoded) ? $decoded : null));
+        }
+
+        return $body;
     }
 }
 ```
 
-Throw any `Throwable` on non-2xx — `OpenAiProvider::doExecute()` catches it and maps the HTTP code to the right `Llm*Exception`. Set the exception `$code` to the HTTP status so the mapping (429 → rate-limit, 4xx → validation, else → provider) picks the right branch.
-
-## Middleware
-
-Compose by wrapping: a `LoggingChatClient` that takes `ChatClientInterface $inner`, does its work, then delegates `chat()` to `$inner->chat()`. Inject `new LoggingChatClient(new CurlChatClient(...), $logger)` through your subclass. The same pattern works for caching, HTTP-level retries, or test recorders.
+`ErrorMapper` gives you a ready-made category from the HTTP status, the cURL code, or the exception — no need to classify failures yourself.
 
 ## See also
 
-- [docs/02-providers-and-fallback.md](02-providers-and-fallback.md) — where providers live in the stack.
-- [docs/10-error-handling.md](10-error-handling.md) — exception mapping inside `OpenAiProvider::doExecute()`.
-- [docs/12-custom-provider.md](12-custom-provider.md) — different API shape, not just a different transport.
-- [docs/architecture.md](architecture.md) — the HTTP layer in context.
+- [12-custom-provider.md](12-custom-provider.md) — when you need a different API format, not a different transport.
+- [10-error-handling.md](10-error-handling.md) — categories and `ErrorMapper`.

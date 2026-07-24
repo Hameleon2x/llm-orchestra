@@ -1,115 +1,138 @@
 **Язык:** [English](../08-config-reference.md) · **Русский**
 
-# Справочник по конфигу агента
+# Справочник по конфигу прогона
 
-Полный справочник по [`Agent\Dto\Config`](../../src/Agent/Dto/Config.php) — набор параметров для одного вызова `Runner::run()`.
+Полный разбор [`Agent\Dto\Config`](../../src/Agent/Dto/Config.php) — параметров одного вызова `Runner::run()`. Настройки самих моделей живут в каталоге, см. [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
 
 ## Поля
 
-| Поле                   | Тип             | По умолчанию                                                         | Описание                                                                    |
-|------------------------|-----------------|----------------------------------------------------------------------|-----------------------------------------------------------------------------|
-| `maxTurns`             | `int`           | `10`                                                                 | Жёсткий лимит итераций агентского цикла (один запрос к LLM = один ход).     |
-| `maxToolCalls`         | `int`           | `30`                                                                 | Суммарный лимит на вызовы тулз за весь run (не на ход).                     |
-| `temperature`          | `?float`        | `null`                                                               | Если `null`, используется значение по умолчанию провайдера.                 |
-| `maxTokens`            | `?int`          | `null`                                                               | Если `null`, используется значение по умолчанию провайдера.                 |
-| `toolChoice`           | `string\|array` | `'auto'`                                                             | `'auto'`, `'required'`, `'none'` или принудительная функция (массив, см. ниже). |
-| `plugins`              | `?array`        | `null`                                                               | Payload OpenRouter-плагинов (например, web search). `null` — без плагинов.  |
-| `extraParams`          | `?array`        | `null`                                                               | Дополнительные поля payload, сливаемые в каждый запрос прогона (например, `session_id`). См. ниже. |
-| `limitNudgeMessage`    | `string`        | `'Лимит обращений к инструментам исчерпан. Дай итоговый ответ ...'`  | User-сообщение, добавляемое при достижении `maxToolCalls` (см. ниже).        |
-| `limitFallbackText`    | `string`        | `'Не удалось завершить за допустимое число вызовов инструментов.'`   | Запасной ответ, когда запрос-«подталкивание» вернул пусто.                  |
-| `turnsExhaustedText`   | `string`        | `'Не удалось завершить за допустимое число итераций.'`               | Финальный ответ при достижении `maxTurns`.                                  |
+**Какой моделью работать**
 
-Все поля публичные — задавайте напрямую, без сеттеров и конструктора:
+- **`model`** (`?string`, по умолчанию `null`) — ключ модели каталога. `null` — модель каталога по умолчанию.
+- **`fallback`** (`?string[]`, `null`) — цепочка запасных моделей на этот прогон. `null` — цепочка каталога.
+- **`policy`** (`?ErrorPolicy`, `null`) — политика повторов на этот прогон. `null` — политика модели или каталога.
+- **`stickyFallback`** (`bool`, `true`) — после переключения продолжать прогон на той модели, которая ответила.
+
+**Границы прогона**
+
+- **`maxTurns`** (`int`, `10`) — сколько раз можно обратиться к модели. Один оборот — один запрос.
+- **`maxToolCalls`** (`int`, `30`) — сколько инструментов можно исполнить за весь прогон, а не за оборот.
+- **`deadlineSeconds`** (`?float`, `null`) — предельная длительность прогона в секундах.
+
+**Что уходит в запрос**
+
+- **`params`** (`GenerationParams`, пустые) — `temperature`, `topP`, `maxTokens`, `seed` на этот прогон.
+- **`extraParams`** (`array`, `[]`) — дополнительные поля payload каждого запроса прогона.
+- **`toolChoice`** (`string|array`, `'auto'`) — `'auto'`, `'required'`, `'none'` или конкретный инструмент.
+
+**Прочее**
+
+- **`toolArgsGuard`** (`?ToolArgsGuard`, включён) — проверка аргументов на протёкшую разметку вызова. `null` — не проверять.
+- **`limitNudgeMessage`** (`string`) — сообщение, которое добавляется в историю при исчерпании `maxToolCalls`.
+- **`limitFallbackText`** (`string`) — ответ, если после этого сообщения модель промолчала.
+- **`turnsExhaustedText`** (`string`) — ответ при исчерпании `maxTurns`.
+
+Все поля публичные — задаются напрямую:
 
 ```php
 use Hameleon2x\Llm\Agent\Dto\Config;
 
 $config = new Config();
-$config->maxTurns     = 6;
+$config->model = 'glm-4.6';
+$config->maxTurns = 6;
 $config->maxToolCalls = 12;
-$config->temperature  = 0.2;
+$config->params->temperature = 0.2;
+$config->params->maxTokens = 8000;
 ```
 
-## `maxTurns` — что такое ход
+## `model` и переключение
 
-Один ход — это один запрос к LLM. Цикл:
+Ключ резолвится каталогом, поэтому подойдёт и любой из алиасов модели. При сбое исполнитель повторяет вызов, а затем переходит к следующей модели цепочки; со `stickyFallback = true` оставшиеся обороты идут уже на ответившей модели — возвращаться к упавшей смысла нет.
+
+## `maxTurns` — что такое оборот
+
+Один оборот — один запрос к модели:
 
 1. Собрать системный промт.
-2. Один раз вызвать `Client::execute()`.
-3. Если в ответе нет вызовов тулз — вернуть успех.
-4. Иначе выполнить все вызовы тулз из ответа и начать следующий ход.
+2. Один раз вызвать модель.
+3. Если вызовов инструментов нет — вернуть успех.
+4. Иначе исполнить все вызовы хода и начать следующий оборот.
 
-Несколько вызовов тулз внутри одного сообщения ассистента считаются за **один** ход, но потребляют несколько единиц из `maxToolCalls`.
+Несколько вызовов инструментов в одном ходе — это **один** оборот, но несколько единиц из `maxToolCalls`.
 
-## `maxToolCalls` и «подталкивание»
+## `maxToolCalls` и добивка
 
-`maxToolCalls` уменьшается с каждым выполненным вызовом тулзы по всем ходам. Когда счётчик обнуляется посреди хода, `Runner` уходит в ветку завершения по лимиту:
+Счётчик уменьшается на каждом исполненном вызове по всем оборотам. Когда он обнуляется посреди хода:
 
-1. Добавить `Message::user(limitNudgeMessage)` в историю.
-2. Отправить ещё один запрос **без** тулз (без `tools` / без `tool_choice`).
-3. Если модель вернула непустой ответ — отдать его как успешный результат.
-4. Иначе вернуть `limitFallbackText` как успешный результат.
+1. Оставшиеся вызовы этого хода закрываются ошибкой — история остаётся валидной (у каждого вызова есть ответ).
+2. В историю добавляется `Message::user($config->limitNudgeMessage)`.
+3. Делается ещё один запрос **без** инструментов.
+4. Непустой ответ отдаётся как успех, иначе возвращается `limitFallbackText`.
 
-Расход токенов этого дополнительного вызова добавляется в `Result::$usage` — см. [docs/09-usage-and-limits.md](09-usage-and-limits.md).
+Итог помечается `Finish::TOOL_LIMIT`, расход токенов добивки входит в `Result::$usage`.
 
-## `turnsExhaustedText`
+## `deadlineSeconds`
 
-Если `maxTurns` достигнут без завершающего ответа, `Runner` возвращает успешный `Result`, у которого `content` равен `turnsExhaustedText`. Полная история (включая последние результаты тулз) сохраняется в `$result->messages`.
+Проверяется перед каждым оборотом. При исчерпании прогон возвращает `Result` с ошибкой категории `deadline`, `finish = Finish::DEADLINE` и полной историей — накопленные результаты инструментов не теряются.
 
-## `temperature` и `maxTokens`
+## `params` и `extraParams`
 
-Оба — опциональные переопределения. Если оставлено `null`, провайдер сначала смотрит на свой конструкторный аргумент, затем на `Client::$defaultTemperature` / `Client::$defaultMaxTokens`. `topP` нельзя переопределить на уровне run — задавайте его на клиенте или провайдере. По умолчанию `Client::$defaultTopP` равен `null`, поэтому `top_p` не отправляется вовсе, пока его явно не задаст клиент или провайдер (часть провайдеров, напр. Anthropic, не принимает `top_p` вместе с `temperature`).
-
-## `toolChoice`
-
-Прозрачно передаётся в OpenAI-совместимый параметр `tool_choice`.
-
-```php
-$config->toolChoice = 'auto';     // model decides
-$config->toolChoice = 'required'; // model MUST call a tool on the next turn
-$config->toolChoice = 'none';     // tools are listed but cannot be called
-
-// Force a specific function:
-$config->toolChoice = [
-    'type'     => 'function',
-    'function' => ['name' => 'get_weather'],
-];
-```
-
-Форма с принудительной функцией отправляется как есть — следите, чтобы структура соответствовала API вашего провайдера.
-
-## `plugins` (OpenRouter)
-
-OpenRouter даёт серверные плагины (web search и т. п.) через поле запроса `plugins`. Пример для web search:
-
-```php
-$config->plugins = [
-    [
-        'id'            => 'web',
-        'max_results'   => 5,
-        'search_prompt' => 'Search the web for recent information about the user question.',
-    ],
-];
-```
-
-`plugins` учитывается только если выбранный провайдер принимает это поле. Обычный OpenAI его игнорирует.
-
-## `extraParams` — провайдер-специфичные поля payload
-
-Универсальный механизм для полей, которые OpenAI-совместимые провайдеры принимают, но в `Config` нет отдельного сеттера: `session_id` у OpenRouter (группировка запросов в observability; максимум 256 символов), `user` у OpenAI (идентификатор конечного пользователя), `response_format` и т. п.
+`params` перекрывает параметры модели и каталога (слияние по явности), а `unsupported` модели вырезает то, что она не принимает, поверх всего. `extraParams` сливается с полями провайдера и модели и уходит в **каждый** запрос прогона, включая добивку по лимиту:
 
 ```php
 $config->extraParams = [
-    'session_id' => 'agent_42_run_17',
+    'session_id' => 'agent_42_run_17',   // группировка прогона в observability провайдера
 ];
 ```
 
-Эти поля сливаются в payload **каждого** запроса, который `Runner` делает за прогон (и итерации цикла, и добивка при исчерпании лимита), — все вызовы внутри одного запуска агента попадают в одну группу. Стандартные ключи (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) всегда выигрывают и через `extraParams` не переопределяются.
+Стандартные поля (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`) через `extraParams` не переопределяются.
 
-См. также [docs/ru/01-getting-started.md](01-getting-started.md#провайдер-специфичные-поля-payload) для аналога на уровне `Request::setExtraParams()`, когда вызываешь `Client::execute()` напрямую без агентского цикла.
+Плагины OpenRouter — частный случай дополнительных полей:
+
+```php
+$config->extraParams['plugins'] = [
+    ['id' => 'web', 'max_results' => 5],
+];
+```
+
+## `toolChoice`
+
+Передаётся в OpenAI-совместимый параметр `tool_choice` как есть.
+
+```php
+$config->toolChoice = 'auto';     // решает модель
+$config->toolChoice = 'required'; // модель обязана вызвать инструмент
+$config->toolChoice = 'none';     // инструменты видны, но вызывать нельзя
+$config->toolChoice = ['type' => 'function', 'function' => ['name' => 'get_weather']];
+```
+
+## `toolArgsGuard`
+
+Проверяет аргументы перед исполнением инструмента и отклоняет вызов, если в значениях протекла разметка формата вызова. Включён по умолчанию: пропущенная утечка означает исполнение на неполных данных, а ложное срабатывание стоит одного переотправленного вызова.
+
+```php
+$config->toolArgsGuard = ToolArgsGuard::default(['~<my_tag~']);  // плюс свои паттерны
+$config->toolArgsGuard = null;                                    // выключить
+```
+
+## Что возвращает прогон
+
+```php
+$result->success;        // bool
+$result->content;        // ?string
+$result->error;          // ?ErrorInfo — категория сбоя
+$result->finish;         // Finish::COMPLETED | TOOL_LIMIT | TURNS_EXHAUSTED | DEADLINE | ERROR | SUSPENDED
+$result->messages;       // Message[] — полная история без системного сообщения
+$result->turnsUsed;
+$result->toolCallsUsed;
+$result->usage;          // токены, стоимость, разбивка по моделям
+$result->modelKey;       // модель, работавшая последней
+$result->attempts;       // AttemptLog[] — попытки, повторы, переключения
+$result->lastResponse;   // ?Response — extra, raw, finishReason последнего хода
+```
 
 ## См. также
 
-- [docs/05-toolbox-and-runner.md](05-toolbox-and-runner.md) — полный разбор `Runner`.
-- [docs/09-usage-and-limits.md](09-usage-and-limits.md) — как счётчики лимитов выглядят в `Result::$usage`.
-- [docs/10-error-handling.md](10-error-handling.md) — как `Runner` сообщает об ошибках, когда дело не в лимитах.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — разбор агентского цикла.
+- [09-usage-and-limits.md](09-usage-and-limits.md) — счётчики токенов и стоимость.
+- [10-error-handling.md](10-error-handling.md) — категории ошибок и повторы.

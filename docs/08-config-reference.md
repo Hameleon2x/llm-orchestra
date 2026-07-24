@@ -1,115 +1,138 @@
 **Language:** **English** · [Русский](ru/08-config-reference.md)
 
-# Agent config reference
+# Run config reference
 
-Full reference for [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the parameter bag for a single `Runner::run()` call.
+A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the parameters of a single `Runner::run()` call. Model settings themselves live in the catalog, see [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
 
 ## Fields
 
-| Field                  | Type            | Default                                                              | Description                                                                 |
-|------------------------|-----------------|----------------------------------------------------------------------|-----------------------------------------------------------------------------|
-| `maxTurns`             | `int`           | `10`                                                                 | Hard limit on agent loop iterations (one LLM request = one turn).           |
-| `maxToolCalls`         | `int`           | `30`                                                                 | Cumulative cap on tool calls for the whole run (not per turn).              |
-| `temperature`          | `?float`        | `null`                                                               | If `null`, the provider default is used.                                    |
-| `maxTokens`            | `?int`          | `null`                                                               | If `null`, the provider default is used.                                    |
-| `toolChoice`           | `string\|array` | `'auto'`                                                             | `'auto'`, `'required'`, `'none'`, or a forced function (array, see below).  |
-| `plugins`              | `?array`        | `null`                                                               | OpenRouter-specific plugin payload (e.g. web search). `null` — no plugins.  |
-| `extraParams`          | `?array`        | `null`                                                               | Extra payload fields merged into every request of the run (e.g. `session_id`). See below. |
-| `limitNudgeMessage`    | `string`        | `'Лимит обращений к инструментам исчерпан. Дай итоговый ответ ...'`  | User message appended when `maxToolCalls` is hit (see below).               |
-| `limitFallbackText`    | `string`        | `'Не удалось завершить за допустимое число вызовов инструментов.'`   | Fallback answer when the nudge request returns nothing.                     |
-| `turnsExhaustedText`   | `string`        | `'Не удалось завершить за допустимое число итераций.'`               | Final answer when `maxTurns` is hit.                                        |
+**Which model to use**
 
-All fields are public — set them directly, no setters or constructor:
+- **`model`** (`?string`, default `null`) — the catalog model key. `null` — the catalog's default model.
+- **`fallback`** (`?string[]`, `null`) — the backup model chain for this run. `null` — the catalog's chain.
+- **`policy`** (`?ErrorPolicy`, `null`) — the retry policy for this run. `null` — the model's or the catalog's policy.
+- **`stickyFallback`** (`bool`, `true`) — after a switch, continue the run on the model that answered.
+
+**Run bounds**
+
+- **`maxTurns`** (`int`, `10`) — how many times the model can be called. One turn is one request.
+- **`maxToolCalls`** (`int`, `30`) — how many tools can be executed over the whole run, not per turn.
+- **`deadlineSeconds`** (`?float`, `null`) — the maximum run duration in seconds.
+
+**What goes into the request**
+
+- **`params`** (`GenerationParams`, empty) — `temperature`, `topP`, `maxTokens`, `seed` for this run.
+- **`extraParams`** (`array`, `[]`) — extra payload fields for every request of the run.
+- **`toolChoice`** (`string|array`, `'auto'`) — `'auto'`, `'required'`, `'none'`, or a specific tool.
+
+**Other**
+
+- **`toolArgsGuard`** (`?ToolArgsGuard`, enabled) — a check of arguments for leaked call markup. `null` — don't check.
+- **`limitNudgeMessage`** (`string`) — the message added to the history when `maxToolCalls` runs out.
+- **`limitFallbackText`** (`string`) — the answer if the model stayed silent after that message.
+- **`turnsExhaustedText`** (`string`) — the answer when `maxTurns` runs out.
+
+All fields are public — set them directly:
 
 ```php
 use Hameleon2x\Llm\Agent\Dto\Config;
 
 $config = new Config();
-$config->maxTurns     = 6;
+$config->model = 'glm-4.6';
+$config->maxTurns = 6;
 $config->maxToolCalls = 12;
-$config->temperature  = 0.2;
+$config->params->temperature = 0.2;
+$config->params->maxTokens = 8000;
 ```
 
-## `maxTurns` — what is a turn
+## `model` and switching
 
-One turn is one LLM request. The loop:
+The key is resolved by the catalog, so any of the model's aliases will work too. On failure the runner retries the call, then moves on to the next model in the chain; with `stickyFallback = true` the remaining turns run on the model that answered — there's no point going back to the one that failed.
 
-1. Compose the system prompt.
-2. Call `Client::execute()` once.
-3. If the response has no tool calls — return success.
-4. Otherwise execute every tool call from the response and start the next turn.
+## `maxTurns` — what a turn is
 
-Multiple tool calls produced inside the same assistant message count as **one** turn but consume several entries from `maxToolCalls`.
+One turn is one request to the model:
+
+1. Build the system prompt.
+2. Call the model once.
+3. If there are no tool calls — return success.
+4. Otherwise execute all calls of the turn and start the next one.
+
+Several tool calls in one turn count as **one** turn, but as several units of `maxToolCalls`.
 
 ## `maxToolCalls` and the nudge
 
-`maxToolCalls` is decremented per executed tool call across all turns. When it hits zero mid-turn, `Runner` enters the limit-finish path:
+The counter decreases on every executed call across all turns. When it hits zero mid-turn:
 
-1. Append `Message::user(limitNudgeMessage)` to the history.
-2. Send one more request **without** tools (no `tools` / no `tool_choice`).
-3. If the model returns a non-empty answer, return it as a success result.
-4. Otherwise return `limitFallbackText` as a success result.
+1. The remaining calls of that turn are closed with an error — the history stays valid (every call has an answer).
+2. `Message::user($config->limitNudgeMessage)` is added to the history.
+3. One more request is made **without** tools.
+4. A non-empty answer is returned as success, otherwise `limitFallbackText` is returned.
 
-The token usage of that extra call is added to `Result::$usage` — see [docs/09-usage-and-limits.md](09-usage-and-limits.md).
+The result is marked `Finish::TOOL_LIMIT`, and the nudge's token spend is included in `Result::$usage`.
 
-## `turnsExhaustedText`
+## `deadlineSeconds`
 
-If `maxTurns` is reached without a terminating answer, `Runner` returns a success `Result` whose `content` is `turnsExhaustedText`. The full history (including the last tool results) is preserved in `$result->messages`.
+Checked before every turn. On expiry the run returns a `Result` with an error of category `deadline`, `finish = Finish::DEADLINE`, and the full history — accumulated tool results are not lost.
 
-## `temperature` and `maxTokens`
+## `params` and `extraParams`
 
-Both are optional overrides. If left `null`, the provider falls back to its constructor argument, and then to `Client::$defaultTemperature` / `Client::$defaultMaxTokens`. `topP` cannot be overridden per run — set it on the client or provider. By default `Client::$defaultTopP` is `null`, so `top_p` is not sent at all unless a client or provider sets it explicitly (some providers, e.g. Anthropic, reject `top_p` together with `temperature`).
-
-## `toolChoice`
-
-Pass-through to the OpenAI-compatible `tool_choice` parameter.
-
-```php
-$config->toolChoice = 'auto';     // model decides
-$config->toolChoice = 'required'; // model MUST call a tool on the next turn
-$config->toolChoice = 'none';     // tools are listed but cannot be called
-
-// Force a specific function:
-$config->toolChoice = [
-    'type'     => 'function',
-    'function' => ['name' => 'get_weather'],
-];
-```
-
-The forced-function form is sent verbatim — keep the shape compatible with your provider's API.
-
-## `plugins` (OpenRouter)
-
-OpenRouter exposes server-side plugins (web search, etc.) via the `plugins` request field. Example for web search:
-
-```php
-$config->plugins = [
-    [
-        'id'            => 'web',
-        'max_results'   => 5,
-        'search_prompt' => 'Search the web for recent information about the user question.',
-    ],
-];
-```
-
-`plugins` is honoured only when the chosen provider accepts the field. For plain OpenAI it is ignored.
-
-## `extraParams` — provider-specific payload fields
-
-Universal escape hatch for fields that the OpenAI-compatible providers accept but the library does not expose as a dedicated `Config` setter — `session_id` on OpenRouter (groups requests in observability; max 256 chars), `user` on OpenAI (end-user identifier), `response_format`, etc.
+`params` overrides the model's and catalog's parameters (merged by explicitness), and the model's `unsupported` strips out what it doesn't accept, on top of everything. `extraParams` merges with the provider's and model's fields and goes into **every** request of the run, including the limit nudge:
 
 ```php
 $config->extraParams = [
-    'session_id' => 'agent_42_run_17',
+    'session_id' => 'agent_42_run_17',   // groups the run in the provider's observability
 ];
 ```
 
-These fields are merged into the payload of **every** request the `Runner` makes during the run (initial turns and the limit-finish nudge), so all calls inside one agent run share the same session group. Standard keys (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `plugins`) always win and cannot be overridden through `extraParams`.
+Standard fields (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`) are not overridden through `extraParams`.
 
-See also [docs/01-getting-started.md](01-getting-started.md#provider-specific-payload-fields) for the request-level `Request::setExtraParams()` equivalent when calling `Client::execute()` directly without the agent loop.
+OpenRouter plugins are a special case of extra fields:
+
+```php
+$config->extraParams['plugins'] = [
+    ['id' => 'web', 'max_results' => 5],
+];
+```
+
+## `toolChoice`
+
+Passed through as-is to the OpenAI-compatible `tool_choice` parameter.
+
+```php
+$config->toolChoice = 'auto';     // the model decides
+$config->toolChoice = 'required'; // the model must call a tool
+$config->toolChoice = 'none';     // tools are visible but cannot be called
+$config->toolChoice = ['type' => 'function', 'function' => ['name' => 'get_weather']];
+```
+
+## `toolArgsGuard`
+
+Checks arguments before executing a tool and rejects the call if call-format markup leaked into the values. Enabled by default: a missed leak means executing on incomplete data, while a false positive costs one resent call.
+
+```php
+$config->toolArgsGuard = ToolArgsGuard::default(['~<my_tag~']);  // plus your own patterns
+$config->toolArgsGuard = null;                                    // disable
+```
+
+## What a run returns
+
+```php
+$result->success;        // bool
+$result->content;        // ?string
+$result->error;          // ?ErrorInfo — the failure category
+$result->finish;         // Finish::COMPLETED | TOOL_LIMIT | TURNS_EXHAUSTED | DEADLINE | ERROR | SUSPENDED
+$result->messages;       // Message[] — the full history without the system message
+$result->turnsUsed;
+$result->toolCallsUsed;
+$result->usage;          // tokens, cost, per-model breakdown
+$result->modelKey;       // the model that worked last
+$result->attempts;       // AttemptLog[] — attempts, retries, switches
+$result->lastResponse;   // ?Response — extra, raw, finishReason of the last turn
+```
 
 ## See also
 
-- [docs/05-toolbox-and-runner.md](05-toolbox-and-runner.md) — full `Runner` walk-through.
-- [docs/09-usage-and-limits.md](09-usage-and-limits.md) — what the limit counters look like in `Result::$usage`.
-- [docs/10-error-handling.md](10-error-handling.md) — how `Runner` reports errors when limits are not the problem.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — a walkthrough of the agent loop.
+- [09-usage-and-limits.md](09-usage-and-limits.md) — token counters and cost.
+- [10-error-handling.md](10-error-handling.md) — error categories and retries.

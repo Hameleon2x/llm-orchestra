@@ -3,9 +3,9 @@
 
 # llm-orchestra
 
-PHP LLM client with provider fallback (OpenAI, OpenRouter, Requesty), an agent loop with tool calling and typed tool results, and PSR-3 logging. Framework-agnostic, no SDK dependencies — uses `ext-curl` directly.
+A PHP LLM client with a model catalog, retries and automatic switching to a backup model on failure, an agent loop with tool calling, typed errors and PSR-3 logging. Framework- and SDK-free — it talks to providers directly over `ext-curl`.
 
-## Install
+## Installation
 
 ```bash
 composer require hameleon2x/llm-orchestra
@@ -17,33 +17,45 @@ composer require hameleon2x/llm-orchestra
 <?php
 require __DIR__ . '/vendor/autoload.php';
 
-use Hameleon2x\Llm\Client;
 use Hameleon2x\Llm\Dto\Request;
+use Hameleon2x\Llm\Orchestra;
 use Hameleon2x\Llm\Provider\OpenAiProvider;
+use Hameleon2x\Llm\Registry;
 
-$client = new Client();
-$client->providers = [
-    ['class' => OpenAiProvider::class, 'token' => 'sk-...', 'model' => 'gpt-4o-mini'],
-];
+$orchestra = new Orchestra(Registry::fromArray([
+    'providers' => ['openai' => ['class' => OpenAiProvider::class, 'token' => 'sk-...']],
+    'models'    => ['mini'   => ['provider' => 'openai', 'name' => 'gpt-4o-mini']],
+    'defaultModel' => 'mini',
+]));
 
-$response = $client->execute(Request::simple('You are a helpful assistant', 'What is PHP?'));
-if ($response->isSuccess()) {
-    echo $response->content;
-}
+$response = $orchestra->execute(Request::simple('Answer briefly.', 'What is PHP?'));
+
+echo $response->isSuccess() ? $response->content : $response->error->category;
 ```
+
+Everything beyond `providers` and `models` is optional: the fallback chain, retry policy, generation params, pricing and tags are added when you need them.
+
+## What's inside
+
+- **A model catalog.** The provider is transport only; a model is a key, an API slug, its own params and policy. The same model behind two providers is two entries, so nothing gets mixed up. The config is validated as a whole at build time.
+- **Retries and backup models.** A single retry level, tunable per error category, and one flat escalation chain per catalog.
+- **Typed errors.** Category, HTTP status, provider code and raw body instead of parsing message text.
+- **A three-layer response.** Typed data (`content`, `toolCalls`, `usage`), normalized provider data (`extra`) and the raw payload (`raw`) — a new provider field never requires a library release.
+- **An agent loop.** Tool calls, turn and call limits, pausing for user input, events for your UI.
 
 ## Documentation
 
-| I want to...                                                  | Read                                                                    |
-|---------------------------------------------------------------|-------------------------------------------------------------------------|
-| Send my first request                                         | [docs/01-getting-started.md](docs/01-getting-started.md)                |
-| Configure providers and fallback order                        | [docs/02-providers-and-fallback.md](docs/02-providers-and-fallback.md)  |
-| Plug in PSR-3 logging (Monolog, Yii2, etc.)                   | [docs/03-logging.md](docs/03-logging.md)                                |
-| Write my own tool (function calling)                          | [docs/04-tools.md](docs/04-tools.md)                                    |
-| Run an agent loop (tools + multi-turn)                        | [docs/05-toolbox-and-runner.md](docs/05-toolbox-and-runner.md)          |
-| Stream events from the agent loop (UI progress, DB logging)   | [docs/06-events.md](docs/06-events.md)                                  |
-| Pause for user input and resume (human-in-the-loop)           | [docs/13-human-in-the-loop.md](docs/13-human-in-the-loop.md)            |
-| See the full doc index                                        | [docs/README.md](docs/README.md)                                        |
+| I want to...                                                | Read                                                                  |
+|-------------------------------------------------------------|-----------------------------------------------------------------------|
+| Send my first request                                       | [docs/01-getting-started.md](docs/01-getting-started.md)                |
+| Describe the model catalog and the fallback chain           | [docs/02-catalog-and-fallback.md](docs/02-catalog-and-fallback.md)      |
+| Wire up PSR-3 logging (Monolog, Yii2, etc.)                 | [docs/03-logging.md](docs/03-logging.md)                                |
+| Write my own tool (function calling)                        | [docs/04-tools.md](docs/04-tools.md)                                    |
+| Run the agent loop (tools + multiple turns)                 | [docs/05-toolbox-and-runner.md](docs/05-toolbox-and-runner.md)          |
+| Receive agent loop events (UI progress, DB logging)         | [docs/06-events.md](docs/06-events.md)                                  |
+| Understand errors, retries and model switching              | [docs/10-error-handling.md](docs/10-error-handling.md)                  |
+| Pause for user input and resume (human-in-the-loop)         | [docs/13-human-in-the-loop.md](docs/13-human-in-the-loop.md)            |
+| See the full documentation index                            | [docs/README.md](docs/README.md)                                        |
 
 ## Requirements
 
@@ -53,8 +65,8 @@ if ($response->isSuccess()) {
 
 ## Versioning
 
-- [CHANGELOG.md](CHANGELOG.md) — release notes.
-- [UPGRADING.md](UPGRADING.md) — major-version migration guide.
+- [CHANGELOG.md](CHANGELOG.md) — per-release notes.
+- [UPGRADING.md](UPGRADING.md) — migration guide between versions.
 
 ## License
 

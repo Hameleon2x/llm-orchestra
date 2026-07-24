@@ -2,235 +2,251 @@
 
 namespace Hameleon2x\Llm\Provider;
 
-use Exception;
-use Hameleon2x\Llm\Dto\Request;
+use Hameleon2x\Llm\Dto\ResolvedCall;
 use Hameleon2x\Llm\Dto\Response;
 use Hameleon2x\Llm\Dto\ToolCall;
-use Hameleon2x\Llm\Exception\LlmProviderException;
-use Hameleon2x\Llm\Exception\LlmRateLimitException;
-use Hameleon2x\Llm\Exception\LlmValidationException;
+use Hameleon2x\Llm\Dto\Usage;
+use Hameleon2x\Llm\Error\ErrorCategory;
+use Hameleon2x\Llm\Error\ErrorInfo;
+use Hameleon2x\Llm\Error\ErrorMapper;
+use Hameleon2x\Llm\Exception\LlmException;
 use Hameleon2x\Llm\Factory\MessageFactory;
 use Hameleon2x\Llm\Factory\ToolDefinitionFactory;
-use Hameleon2x\Llm\Http\ChatClientInterface;
-use Hameleon2x\Llm\Http\CurlChatClient;
-use Psr\Log\LoggerInterface;
-use Throwable;
+use Hameleon2x\Llm\Support\ArrayPath;
 
 /**
- * Провайдер для OpenAI-совместимого Chat Completions API. Базовый класс для
- * OpenRouter и Requesty — они отличаются только дефолтами baseUrl/model и именем.
+ * Провайдер OpenAI-совместимого Chat Completions API. База для шлюзов (OpenRouter, Requesty)
+ * и для собственных провайдеров: у них отличаются только базовый URL, имя и карта capture.
  */
 class OpenAiProvider extends BaseProvider
 {
-    protected ?ChatClientInterface $client = null;
-
     /**
-     * @param string|null $baseUrl Базовый URL без /v1. null — https://api.openai.com
+     * Поля payload, которые формирует сам провайдер. Расширения из extraParams их не перекрывают:
+     * иначе конфиг мог бы незаметно подменить модель или сообщения.
      */
-    public function __construct(
-        string           $token,
-        string           $model = 'gpt-4o-mini',
-        ?string          $baseUrl = null,
-        ?float           $temperature = null,
-        ?float           $topP = null,
-        ?int             $maxTokens = null,
-        int              $retryAttempts = 3,
-        int              $timeout = 30,
-        int              $priority = 999,
-        ?array           $supportedModels = null,
-        ?LoggerInterface $logger = null
-    )
-    {
-        parent::__construct(
-            $token,
-            $model,
-            $baseUrl,
-            $temperature,
-            $topP,
-            $maxTokens,
-            $retryAttempts,
-            $timeout,
-            $priority,
-            $supportedModels,
-            $logger
-        );
-    }
+    private const RESERVED_PAYLOAD_KEYS = [
+        'model', 'messages', 'tools', 'tool_choice', 'temperature', 'top_p', 'max_tokens', 'seed', 'stream',
+    ];
 
-    protected function getClient(): ChatClientInterface
-    {
-        if ($this->client === null) {
-            $this->client = new CurlChatClient(
-                $this->token,
-                $this->baseUrl ?? null,
-                $this->timeout > 0 ? $this->timeout : 30
-            );
-        }
-        return $this->client;
-    }
-
-    protected function doExecute(Request $request): Response
-    {
-        $client = $this->getClient();
-
-        $params = [
-            'model'       => $this->getModel($request),
-            'messages'    => $this->prepareMessages($request),
-            'temperature' => $this->getTemperature($request),
-            'max_tokens'  => $this->getMaxTokens($request),
-        ];
-
-        // top_p отправляем только если задан явно (в Request или в конфиге провайдера): часть
-        // провайдеров (напр. Anthropic) не принимает temperature и top_p одновременно. По умолчанию
-        // Client::$defaultTopP = null → top_p не уходит, семплированием управляет temperature.
-        if ($request->topP !== null || $this->topP !== null) {
-            $params['top_p'] = $this->getTopP($request);
-        }
-
-        if (!empty($request->tools)) {
-            $params['tools'] = $this->prepareTools($request);
-            if ($request->toolChoice !== null) {
-                $params['tool_choice'] = $request->toolChoice;
-            }
-        }
-
-        if ($request->seed !== null) {
-            $params['seed'] = $request->seed;
-        }
-
-        if (!empty($request->plugins)) {
-            $params['plugins'] = $request->plugins;
-        }
-
-        if (!empty($request->extraParams)) {
-            // Стандартные ключи всегда выигрывают — extraParams не может перетереть
-            // model/messages/temperature и прочие зарезервированные поля.
-            $params = array_merge($request->extraParams, $params);
-        }
-
-        try {
-            $raw = $client->chat($params);
-
-            if ($raw === false || $raw === '') {
-                throw new LlmProviderException('Empty response from API', 0, null, true);
-            }
-
-            $response = json_decode($raw);
-
-            if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new LlmProviderException('Invalid JSON response: ' . json_last_error_msg(), 0, null, true);
-            }
-
-            // Ошибка API в теле ответа (а не через HTTP-код).
-            if (isset($response->error)) {
-                $err = $response->error;
-                $message = is_object($err) && isset($err->message) ? $err->message : (string)$err;
-                $code = is_object($err) && isset($err->code) ? (int)$err->code : 0;
-                if ($code === 429) {
-                    throw new LlmRateLimitException($message, $code);
-                }
-                if ($code >= 400 && $code < 500) {
-                    throw new LlmValidationException($message, $code);
-                }
-                throw new LlmProviderException($message, $code, null, true);
-            }
-
-            $choices = $response->choices ?? [];
-            $choice = $choices[0] ?? null;
-
-            if (!$choice || !isset($choice->message)) {
-                throw new LlmProviderException('Empty response from API', 0, null, false);
-            }
-
-            $message = $choice->message;
-            $content = $message->content ?? null;
-            $toolCalls = [];
-
-            if (isset($message->tool_calls) && is_array($message->tool_calls)) {
-                foreach ($message->tool_calls as $tc) {
-                    $func = $tc->function ?? (object)['name' => '', 'arguments' => '{}'];
-                    $toolCalls[] = new ToolCall(
-                        $tc->id ?? '',
-                        $tc->type ?? 'function',
-                        [
-                            'name'      => is_object($func) && isset($func->name) ? $func->name : '',
-                            'arguments' => is_object($func) && isset($func->arguments) ? $func->arguments : '{}',
-                        ]
-                    );
-                }
-            }
-
-            $usage = $response->usage ?? (object)[];
-            $metadata = [
-                'promptTokens'     => $usage->prompt_tokens ?? 0,
-                'completionTokens' => $usage->completion_tokens ?? 0,
-                'totalTokens'      => $usage->total_tokens ?? 0,
-                'finishReason'     => $choice->finish_reason ?? null,
-            ];
-
-            $modelName = $response->model ?? $this->getModel($request);
-
-            return Response::success(
-                $this->getName(),
-                $modelName,
-                $content,
-                $toolCalls,
-                $metadata
-            );
-        } catch (LlmRateLimitException $e) {
-            throw $e;
-        } catch (LlmValidationException $e) {
-            throw $e;
-        } catch (LlmProviderException $e) {
-            throw $e;
-        } catch (Exception $e) {
-            $message = $e->getMessage();
-            $code = (int)$e->getCode();
-            if ($code === 429) {
-                throw new LlmRateLimitException($message, $code, $e);
-            }
-            if ($code >= 400 && $code < 500) {
-                throw new LlmValidationException($message, $code, $e);
-            }
-            // cURL error 56 (Failure when receiving data from the peer) — не повторяем
-            $retryable = !($code === 56 && strpos($message, 'cURL error') !== false);
-            throw new LlmProviderException(
-                'OpenAI request failed: ' . $message,
-                $code,
-                $e,
-                $retryable
-            );
-        } catch (Throwable $e) {
-            $code = (int)$e->getCode();
-            $retryable = !($code === 56 && strpos($e->getMessage(), 'cURL error') !== false);
-            throw new LlmProviderException(
-                'OpenAI request failed: ' . $e->getMessage(),
-                $code,
-                $e,
-                $retryable
-            );
-        }
-    }
-
-    protected function prepareMessages(Request $request): array
-    {
-        $messages = [];
-        foreach ($request->messages as $message) {
-            $messages[] = MessageFactory::toArray($message);
-        }
-        return $messages;
-    }
-
-    protected function prepareTools(Request $request): array
-    {
-        $tools = [];
-        foreach ($request->tools as $tool) {
-            $tools[] = ToolDefinitionFactory::toArray($tool);
-        }
-        return $tools;
-    }
-
-    public function getName(): string
+    public function name(): string
     {
         return 'OpenAI';
+    }
+
+    protected function defaultBaseUrl(): string
+    {
+        return 'https://api.openai.com';
+    }
+
+    /**
+     * Поля, которые шлюзы кладут рядом с ответом. Размышления reasoning-моделей приезжают под
+     * двумя разными именами — берём то, что пришло.
+     */
+    protected function defaultCapture(): array
+    {
+        return [
+            'reasoning'         => ['choices.0.message.reasoning_content', 'choices.0.message.reasoning'],
+            'annotations'       => 'choices.0.message.annotations',
+            'refusal'           => 'choices.0.message.refusal',
+            'citations'         => 'citations',
+            'systemFingerprint' => 'system_fingerprint',
+            'upstream'          => 'provider',
+        ];
+    }
+
+    public function execute(ResolvedCall $call): Response
+    {
+        $payload = $this->buildPayload($call);
+
+        $startedAt = microtime(true);
+        $body = $this->client()->chat($payload, $call->headers, $call->timeout);
+        $latency = microtime(true) - $startedAt;
+
+        $raw = json_decode($body, true);
+        if (!is_array($raw)) {
+            throw new LlmException(new ErrorInfo(
+                ErrorCategory::INVALID_RESPONSE,
+                'Ответ провайдера не разбирается как JSON: ' . json_last_error_msg()
+            ));
+        }
+
+        // Часть шлюзов отдаёт ошибку с кодом 200 и полем error в теле.
+        $payloadError = ErrorMapper::fromPayload($raw);
+        if ($payloadError !== null) {
+            throw new LlmException($payloadError);
+        }
+
+        return $this->parse($raw, $call, $latency);
+    }
+
+    /**
+     * Тело запроса: расширения снизу, поля провайдера сверху.
+     */
+    protected function buildPayload(ResolvedCall $call): array
+    {
+        $payload = $call->extraParams;
+        foreach (self::RESERVED_PAYLOAD_KEYS as $key) {
+            unset($payload[$key]);
+        }
+
+        $payload['model'] = $call->modelName();
+        $payload['messages'] = array_map(
+            static fn($message) => MessageFactory::toArray($message),
+            $call->request->messages
+        );
+
+        $payload += $call->paramsPayload();
+
+        if (!empty($call->request->tools)) {
+            $payload['tools'] = array_map(
+                static fn($tool) => ToolDefinitionFactory::toArray($tool),
+                $call->request->tools
+            );
+            if ($call->request->toolChoice !== null) {
+                $payload['tool_choice'] = $call->request->toolChoice;
+            }
+        }
+
+        return $payload;
+    }
+
+    /**
+     * Разбор успешного ответа.
+     *
+     * @throws LlmException если ответ пуст или вызовы инструментов пришли оборванными
+     */
+    protected function parse(array $raw, ResolvedCall $call, float $latency): Response
+    {
+        $choice = ArrayPath::get($raw, 'choices.0');
+        if (!is_array($choice) || !isset($choice['message'])) {
+            throw new LlmException(new ErrorInfo(
+                ErrorCategory::INVALID_RESPONSE,
+                'В ответе провайдера нет ни одного варианта ответа модели.'
+            ));
+        }
+
+        $message = (array)$choice['message'];
+        $toolCalls = $this->parseToolCalls($message);
+        $content = $this->normalizeContent($message['content'] ?? null);
+        $finishReason = isset($choice['finish_reason']) ? (string)$choice['finish_reason'] : null;
+
+        // Оборванный по лимиту токенов вызов инструмента опаснее пустого ответа: аргументы
+        // не разбираются, и инструмент отработал бы на неполных данных.
+        foreach ($toolCalls as $toolCall) {
+            if ($toolCall->hasBrokenArguments()) {
+                throw new LlmException(new ErrorInfo(
+                    ErrorCategory::INVALID_RESPONSE,
+                    'Аргументы вызова инструмента «' . $toolCall->getFunctionName() . '» пришли оборванными.'
+                ));
+            }
+        }
+
+        if (trim((string)$content) === '' && $toolCalls === []) {
+            throw new LlmException(new ErrorInfo(
+                ErrorCategory::EMPTY_RESPONSE,
+                'Модель вернула ход без текста и без вызовов инструментов'
+                . ($finishReason !== null ? " (finish_reason: {$finishReason})" : '') . '.'
+            ));
+        }
+
+        $response = new Response();
+        $response->content = $content;
+        $response->toolCalls = $toolCalls;
+        $response->usage = $this->parseUsage($raw);
+        $response->modelKey = $call->modelKey();
+        $response->modelName = isset($raw['model']) ? (string)$raw['model'] : $call->modelName();
+        $response->providerKey = $call->providerKey();
+        $response->extra = $this->capture($raw, $call);
+        $response->metadata = [
+            'finishReason' => $finishReason,
+            'latency'      => $latency,
+        ];
+        $response->setRaw($call->keepRaw ? $raw : null);
+
+        return $response;
+    }
+
+    /**
+     * Потребление токенов. Пути фиксированы: это стандарт OpenAI-совместимых API, а всё
+     * нестандартное забирается картой capture.
+     */
+    protected function parseUsage(array $raw): Usage
+    {
+        $usage = new Usage();
+        $usage->calls = 1;
+        $usage->promptTokens = (int)ArrayPath::get($raw, 'usage.prompt_tokens', 0);
+        $usage->completionTokens = (int)ArrayPath::get($raw, 'usage.completion_tokens', 0);
+        $usage->totalTokens = (int)ArrayPath::get(
+            $raw,
+            'usage.total_tokens',
+            $usage->promptTokens + $usage->completionTokens
+        );
+        $usage->cachedTokens = (int)ArrayPath::get($raw, 'usage.prompt_tokens_details.cached_tokens', 0);
+        $usage->reasoningTokens = (int)ArrayPath::get($raw, 'usage.completion_tokens_details.reasoning_tokens', 0);
+
+        $cost = ArrayPath::get($raw, 'usage.cost');
+        if (is_numeric($cost)) {
+            $usage->cost = (float)$cost;
+        }
+
+        return $usage;
+    }
+
+    /**
+     * @return ToolCall[]
+     */
+    protected function parseToolCalls(array $message): array
+    {
+        if (!isset($message['tool_calls']) || !is_array($message['tool_calls'])) {
+            return [];
+        }
+
+        $toolCalls = [];
+        foreach ($message['tool_calls'] as $raw) {
+            if (!is_array($raw)) {
+                continue;
+            }
+            $function = (array)($raw['function'] ?? []);
+            $toolCalls[] = new ToolCall(
+                (string)($raw['id'] ?? ''),
+                (string)($raw['type'] ?? 'function'),
+                [
+                    'name'      => (string)($function['name'] ?? ''),
+                    'arguments' => $function['arguments'] ?? '{}',
+                ],
+                $raw
+            );
+        }
+
+        return $toolCalls;
+    }
+
+    /**
+     * Текст ответа. Обычно строка, но часть провайдеров отдаёт список блоков — склеиваем текстовые.
+     *
+     * @param mixed $content
+     */
+    protected function normalizeContent($content): ?string
+    {
+        if ($content === null || is_string($content)) {
+            return $content;
+        }
+
+        if (!is_array($content)) {
+            return null;
+        }
+
+        $parts = [];
+        foreach ($content as $block) {
+            if (is_string($block)) {
+                $parts[] = $block;
+                continue;
+            }
+            if (is_array($block) && isset($block['text']) && is_string($block['text'])) {
+                $parts[] = $block['text'];
+            }
+        }
+
+        return $parts === [] ? null : implode('', $parts);
     }
 }

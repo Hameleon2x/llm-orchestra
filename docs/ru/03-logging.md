@@ -2,56 +2,55 @@
 
 # Логирование
 
-`Client` и `BaseProvider` пишут в PSR-3 `LoggerInterface`. Логирование опциональное — без логгера оба откатываются к `Psr\Log\NullLogger`.
+`Orchestra` и транспорт пишут в PSR-3 `LoggerInterface`. Логирование опционально — без логгера используется `Psr\Log\NullLogger`.
 
 ## Подключение
 
-Передай логгер в конструктор `Client`. Он автоматически разойдётся по всем провайдерам, собранным из массива-конфига.
+Логгер передаётся в конструктор `Orchestra` и расходится по всем провайдерам каталога.
 
 ```php
 <?php
-use Hameleon2x\Llm\Client;
-use Hameleon2x\Llm\Provider\OpenAiProvider;
+use Hameleon2x\Llm\Orchestra;
+use Hameleon2x\Llm\Registry;
 use Psr\Log\LoggerInterface;
 
 /** @var LoggerInterface $logger */
-$client = new Client($logger);
-$client->providers = [
-    ['class' => OpenAiProvider::class, 'token' => 'sk-...', 'model' => 'gpt-4o-mini'],
-];
+$orchestra = new Orchestra(Registry::fromArray($config), $logger);
 ```
-
-Если собираешь провайдеров сам (`new OpenAiProvider(...)`) и кладёшь готовые экземпляры прямо в `$client->providers`, передавай логгер последним аргументом конструктора — `Client` не дописывает его в уже собранные экземпляры.
 
 ## Что именно логируется
 
-| Источник                   | Уровень   | Событие                                                                         |
-|----------------------------|-----------|---------------------------------------------------------------------------------|
-| `BaseProvider::execute()`  | `warning` | Поймана retryable-ошибка; будет ещё одна попытка (или попытки исчерпаны).       |
-| `Client::execute()`        | `warning` | Провайдер вернул `status !== SUCCESS`, переход к следующему.                    |
-| `Client::execute()`        | `warning` | Провайдер бросил `LlmException`, переход к следующему.                          |
-| `Client::execute()`        | `error`   | Провайдер бросил неожиданный `Throwable`; пишется со стеком.                    |
-| `Client::execute()`        | `error`   | Все провайдеры упали; агрегированный отчёт с `providers_attempted`.             |
+Пять записей, каждая с контекстом в виде ассоциативного массива (стиль PSR-3):
 
-`warning` — для повторов и штатных fallback; `error` — для неожиданных исключений и полного провала.
+- `warning` **`LLM attempt failed`** — попытка вызова модели не удалась. Контекст: `model`, `provider`, `attempt`, `category`, `message`.
+- `warning` **`LLM wait budget exhausted, stopping retries`** — исчерпан бюджет ожидания `maxWaitSeconds`. Контекст: `model`, `maxWaitSeconds`.
+- `info` **`LLM switching to next model in fallback chain`** — работа передана следующей модели цепочки. Контекст: `from`, `to`, `category`.
+- `error` **`LLM all attempts exhausted`** — повторы и переключения не помогли, запрос провалился. Контекст: `model`, `category`, `message`, `attempts`.
+- `debug` **`LLM request` / `LLM response`** — исходящий payload и сырой ответ; только при `'debug' => true` у провайдера. Контекст: `url`, `payload` и `status`, `body`.
 
-Ключи контекста (ассоциативный массив, по стилю PSR-3):
+Уровни расставлены так: `warning` — сбой, который может пройти со второй попытки; `info` — смена модели; `error` — окончательный провал запроса.
 
-| Сообщение                                            | Ключи контекста                                                     |
-|------------------------------------------------------|---------------------------------------------------------------------|
-| `LLM provider attempt failed` (провайдер)            | `provider`, `attempt`, `error`, `code`, `retryable`                 |
-| `LLM provider returned unsuccessful response`        | `provider`, `status`, `error`                                       |
-| `LLM provider threw exception during request`        | `provider`, `exception`, `message`                                  |
-| `Unexpected exception while calling LLM provider`    | `provider`, `exception`, `message`, `trace`                         |
-| `All LLM providers failed`                           | `providers_attempted`, `last_status`, `last_error`                  |
+Ключ `category` — значение из `Error\ErrorCategory`. По нему удобно строить метрики: сколько таймаутов, сколько ограничений частоты, как часто срабатывает переключение на запасную модель.
+
+## Отладка запросов
+
+Полный payload и сырой ответ пишутся на уровне `debug`, если у провайдера включён флаг:
+
+```php
+'providers' => [
+    'openai' => ['class' => OpenAiProvider::class, 'token' => 'sk-...', 'debug' => true],
+],
+```
+
+Держать включённым постоянно не стоит: в лог попадают промты и ответы целиком.
 
 ## Пример: Monolog
 
 ```php
 <?php
-use Hameleon2x\Llm\Client;
 use Hameleon2x\Llm\Dto\Request;
-use Hameleon2x\Llm\Provider\OpenAiProvider;
+use Hameleon2x\Llm\Orchestra;
+use Hameleon2x\Llm\Registry;
 use Monolog\Handler\StreamHandler;
 use Monolog\Level;
 use Monolog\Logger;
@@ -59,17 +58,13 @@ use Monolog\Logger;
 $logger = new Logger('llm');
 $logger->pushHandler(new StreamHandler(__DIR__ . '/llm.log', Level::Warning));
 
-$client = new Client($logger);
-$client->providers = [
-    ['class' => OpenAiProvider::class, 'token' => 'sk-...', 'model' => 'gpt-4o-mini'],
-];
-
-$response = $client->execute(Request::simple('be brief', 'hi'));
+$orchestra = new Orchestra(Registry::fromArray($config), $logger);
+$response = $orchestra->execute(Request::simple('be brief', 'hi'));
 ```
 
 ## Пример: мост в Yii2
 
-Yii2 логирует через `Yii::info/warning/error`, а это не PSR-3. Тонкий адаптер связывает их — этот код лежит в твоём приложении, а не в пакете:
+Yii2 логирует через `Yii::info/warning/error`, а это не PSR-3. Тонкий адаптер связывает их — этот код лежит в приложении, а не в пакете:
 
 ```php
 <?php
@@ -108,19 +103,25 @@ final class Yii2PsrLogger extends AbstractLogger
 }
 ```
 
-И там, где собираешь клиент:
+И там, где собирается исполнитель:
 
 ```php
 <?php
 use app\components\Yii2PsrLogger;
-use Hameleon2x\Llm\Client;
+use Hameleon2x\Llm\Orchestra;
 
-$client = new Client(new Yii2PsrLogger('llm'));
+$orchestra = new Orchestra($registry, new Yii2PsrLogger('llm'));
 ```
 
-Та же схема работает для любого фреймворка — реализуй `Psr\Log\LoggerInterface` (или наследуй `Psr\Log\AbstractLogger`) и внутри `log()` пробрасывай в API своего фреймворка.
+Разные подсистемы одного приложения удобно разводить по категориям: `new Orchestra($registry, new Yii2PsrLogger('assistant'))` и `new Orchestra($registry, new Yii2PsrLogger('tasker'))` работают на общем каталоге, но пишут в разные каналы.
+
+Та же схема подходит любому фреймворку — реализуйте `Psr\Log\LoggerInterface` (или наследуйте `Psr\Log\AbstractLogger`).
+
+## Прогресс вместо логов
+
+Логи отвечают на вопрос «что случилось потом», а интерфейсу нужно «что происходит сейчас». Для этого есть наблюдатель попыток (`Orchestra::withObserver()`) и события агентского цикла — см. [10-error-handling.md](10-error-handling.md) и [06-events.md](06-events.md).
 
 ## См. также
 
-- [02-providers-and-fallback.md](02-providers-and-fallback.md) — что стоит за этими лог-записями.
-- [06-events.md](06-events.md) — отдельный emit-callback `Runner` для прогресса внутри цикла (UI-ориентированный, дополняет PSR-3).
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — что стоит за этими записями.
+- [10-error-handling.md](10-error-handling.md) — категории ошибок и журнал попыток.

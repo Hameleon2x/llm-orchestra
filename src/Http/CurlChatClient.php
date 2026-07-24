@@ -2,82 +2,123 @@
 
 namespace Hameleon2x\Llm\Http;
 
-use RuntimeException;
+use Hameleon2x\Llm\Error\ErrorMapper;
+use Hameleon2x\Llm\Exception\LlmException;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 /**
- * Реализация ChatClientInterface через расширение PHP cURL. Внешних HTTP-зависимостей нет.
+ * Транспорт на расширении cURL. Внешних HTTP-зависимостей у пакета нет.
+ *
+ * Сбои приводятся к категориям здесь же: код cURL и HTTP-статус разбирает ErrorMapper, наружу
+ * уходит LlmException с готовым ErrorInfo.
  */
-class CurlChatClient implements ChatClientInterface
+final class CurlChatClient implements ChatClientInterface
 {
+    private const DEFAULT_BASE_URL = 'https://api.openai.com';
+    private const CHAT_PATH        = '/v1/chat/completions';
+
     private string $url;
     private string $token;
     private int    $timeout;
+    private bool   $debug;
 
-    private const DEFAULT_BASE_URL = 'https://api.openai.com';
-    private const CHAT_PATH        = '/v1/chat/completions';
-    private const DEBUG = false;
+    private LoggerInterface $logger;
 
-    public function __construct(string $token, ?string $baseUrl = null, int $timeout = 300)
-    {
+    public function __construct(
+        string           $token,
+        ?string          $baseUrl = null,
+        int              $timeout = 120,
+        bool             $debug = false,
+        ?LoggerInterface $logger = null
+    ) {
         $baseUrl = rtrim($baseUrl ?? self::DEFAULT_BASE_URL, '/');
         $this->url = $baseUrl . self::CHAT_PATH;
         $this->token = $token;
-        $this->timeout = $timeout > 0 ? $timeout : 300;
+        $this->timeout = $timeout > 0 ? $timeout : 120;
+        $this->debug = $debug;
+        $this->logger = $logger ?? new NullLogger();
     }
 
-    public function chat(array $params): string
+    public function chat(array $payload, array $headers = [], ?int $timeout = null): string
     {
-        $params['stream'] = false;
-        $bodyJson = json_encode($params, JSON_UNESCAPED_UNICODE);
-        $bodyLen = strlen($bodyJson);
+        $payload['stream'] = false;
+        $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        $timeout = $timeout !== null && $timeout > 0 ? $timeout : $this->timeout;
 
-        $host = parse_url($this->url, PHP_URL_HOST);
-        if (self::DEBUG) {
-            echo "[LLM cURL] POST {$host} body={$bodyLen} bytes\n";
+        if ($this->debug) {
+            $this->logger->debug('LLM request', ['url' => $this->url, 'payload' => $payload]);
         }
 
-        $ch = curl_init($this->url);
-        curl_setopt_array($ch, [
+        $curl = curl_init($this->url);
+        curl_setopt_array($curl, [
             CURLOPT_POST           => true,
-            CURLOPT_POSTFIELDS     => $bodyJson,
+            CURLOPT_POSTFIELDS     => $body,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER     => [
-                'Content-Type: application/json',
-                'Accept: application/json',
-                'Authorization: Bearer ' . $this->token,
-            ],
-            CURLOPT_TIMEOUT        => $this->timeout,
-            CURLOPT_CONNECTTIMEOUT => min(30, $this->timeout),
+            CURLOPT_HTTPHEADER     => $this->buildHeaders($headers),
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_CONNECTTIMEOUT => min(30, $timeout),
         ]);
 
-        $t0 = microtime(true);
-        $body = curl_exec($ch);
-        $elapsed = round(microtime(true) - $t0, 3);
+        $responseBody = curl_exec($curl);
+        $errno = curl_errno($curl);
+        $httpCode = (int)curl_getinfo($curl, CURLINFO_RESPONSE_CODE);
+        curl_close($curl);
 
-        $errNo = curl_errno($ch);
-        $httpCode = (int)curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-        curl_close($ch);
+        if ($errno !== 0) {
+            $message = curl_strerror($errno) ?: 'Unknown cURL error';
 
-        if ($errNo !== 0) {
-            $errMsg = curl_strerror($errNo) ?: 'Unknown cURL error';
-            if (self::DEBUG) {
-                echo "[LLM cURL] FAIL {$elapsed}s: cURL error {$errNo}: {$errMsg}\n";
-            }
-            throw new RuntimeException("cURL error {$errNo}: {$errMsg}", $errNo);
+            throw new LlmException(ErrorMapper::fromCurl($errno, "cURL error {$errno}: {$message}"));
         }
 
-        if (self::DEBUG) {
-            echo "[LLM cURL] DONE {$httpCode} len=" . strlen($body) . " {$elapsed}s\n";
+        $responseBody = (string)$responseBody;
+
+        if ($this->debug) {
+            $this->logger->debug('LLM response', ['status' => $httpCode, 'body' => $responseBody]);
         }
 
         if ($httpCode >= 400) {
-            throw new RuntimeException("HTTP {$httpCode}: " . substr($body, 0, 500), $httpCode);
+            $payloadDecoded = json_decode($responseBody, true);
+
+            throw new LlmException(ErrorMapper::fromHttpStatus(
+                $httpCode,
+                $responseBody,
+                is_array($payloadDecoded) ? $payloadDecoded : null
+            ));
         }
 
-        if ($body === '' || $body === false) {
-            throw new RuntimeException('Empty response body from API');
+        return $responseBody;
+    }
+
+    /**
+     * Обязательные заголовки плюс заголовки провайдера и модели. Перезаписать обязательные нельзя.
+     *
+     * @param array<string, string> $extra
+     * @return string[]
+     */
+    private function buildHeaders(array $extra): array
+    {
+        $headers = [
+            'Content-Type' => 'application/json',
+            'Accept'       => 'application/json',
+        ];
+
+        foreach ($extra as $name => $value) {
+            if ($value === null) {
+                continue;
+            }
+            $headers[(string)$name] = (string)$value;
         }
 
-        return (string)$body;
+        if ($this->token !== '') {
+            $headers['Authorization'] = 'Bearer ' . $this->token;
+        }
+
+        $result = [];
+        foreach ($headers as $name => $value) {
+            $result[] = $name . ': ' . $value;
+        }
+
+        return $result;
     }
 }

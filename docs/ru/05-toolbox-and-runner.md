@@ -1,48 +1,157 @@
 **Язык:** [English](../05-toolbox-and-runner.md) · **Русский**
 
-# Toolbox и Runner
+# Инструменты и агентский цикл
 
-`Agent\Runner` — это агентский цикл: дёрнуть модель, выполнить тулзы, о которых она попросила, дописать результаты в историю, повторять, пока модель не выдаст финальный ответ или не упрётся в лимит. `Toolbox` — реестр, из которого `Runner` берёт тулзы. Контракт `ToolInterface` описан в [04-tools.md](04-tools.md).
+Обычный запрос — это «спросил → получил текст». Агентский цикл нужен, когда модель должна сначала **сходить за данными**: посмотреть погоду, найти клиента в базе, посчитать что-то. Тогда разговор идёт так:
 
-## `AbstractToolbox`
+1. Мы отправляем модели вопрос и список доступных инструментов.
+2. Модель отвечает не текстом, а просьбой: «вызови `get_weather` с аргументом `city = Москва`».
+3. Мы выполняем инструмент у себя в коде и отправляем результат обратно.
+4. Модель либо просит ещё что-то, либо отвечает пользователю.
 
-`Hameleon2x\Llm\Agent\AbstractToolbox` — дефолтная реализация `ToolboxInterface`. Наследуйся, реализуй `buildTools()`, при желании подкручивай `log_message`.
+Эти четыре шага и крутит `Agent\Runner`. Инструменты он берёт из **тулбокса** — реестра, который вы описываете сами. Как написать один инструмент, разобрано в [04-tools.md](04-tools.md); здесь — как собрать их вместе и запустить цикл.
+
+## Полный пример
+
+Скопируйте целиком, подставьте токен — заработает. Инструмент здесь самый простой, чтобы не отвлекать.
 
 ```php
 <?php
-use App\Llm\Tools\GetWeatherTool;
+require __DIR__ . '/vendor/autoload.php';
+
+use Hameleon2x\Llm\Agent\AbstractToolbox;
+use Hameleon2x\Llm\Agent\Dto\Config;
+use Hameleon2x\Llm\Agent\Runner;
+use Hameleon2x\Llm\Dto\Message;
+use Hameleon2x\Llm\Orchestra;
+use Hameleon2x\Llm\Provider\OpenAiProvider;
+use Hameleon2x\Llm\Registry;
+use Hameleon2x\Llm\Tool\AbstractTool;
+use Hameleon2x\Llm\Tool\Dto\Property;
+use Hameleon2x\Llm\Tool\Dto\Result as ToolResult;
+
+// 1. Инструмент: что модель сможет вызвать.
+final class GetWeatherTool extends AbstractTool
+{
+    public function getName(): string
+    {
+        return 'get_weather';
+    }
+
+    public function getDescription(): string
+    {
+        return 'Текущая погода в городе. Вызывай, когда пользователь спрашивает про погоду.';
+    }
+
+    public function getParameters(): array
+    {
+        return [new Property('city', 'string', 'Название города, например «Москва»', true)];
+    }
+
+    public function execute(array $args): ToolResult
+    {
+        // Здесь был бы запрос к погодному API.
+        return ToolResult::ok(['city' => $args['city'] ?? '', 'temp' => 7, 'text' => 'облачно']);
+    }
+}
+
+// 2. Тулбокс: реестр инструментов для этого прогона.
+final class WeatherToolbox extends AbstractToolbox
+{
+    protected function buildTools(): array
+    {
+        return [new GetWeatherTool()];
+    }
+}
+
+// 3. Каталог моделей и исполнитель — как в 01-getting-started.
+$orchestra = new Orchestra(Registry::fromArray([
+    'providers' => ['openai' => ['class' => OpenAiProvider::class, 'token' => 'sk-...']],
+    'models'    => ['mini'   => ['provider' => 'openai', 'name' => 'gpt-4o-mini']],
+    'defaultModel' => 'mini',
+]));
+
+// 4. Настройки прогона.
+$config = new Config();
+$config->model = 'mini';
+$config->maxTurns = 5;
+$config->maxToolCalls = 10;
+$config->params->temperature = 0.3;
+
+// 5. Запуск.
+$result = (new Runner($orchestra))->run(
+    [Message::user('Какая сейчас погода в Москве?')],
+    new WeatherToolbox(),
+    static fn(): string => 'Ты кратко отвечаешь на вопросы о погоде. Факты бери из инструментов.',
+    $config
+);
+
+echo $result->success ? $result->content : 'Сбой: ' . $result->error->category;
+```
+
+Модель сама решит, что для ответа нужен `get_weather`, вызовет его, получит `{"city":"Москва","temp":7,"text":"облачно"}` и сформулирует ответ пользователю.
+
+## Как читать результат
+
+`Runner::run()` возвращает `Agent\Dto\Result`. Полезные поля:
+
+- **`$success`** — прогон дошёл до ответа. `false` при сбое вызова модели, при истечении срока прогона и при паузе на внешний ввод.
+- **`$content`** — итоговый текст для пользователя; `null`, когда `$success` равен `false`.
+- **`$error`** — `Error\ErrorInfo` с категорией сбоя, если он был. Разбирать текст ошибки не нужно, см. [10-error-handling.md](10-error-handling.md).
+- **`$finish`** — почему цикл остановился: `Finish::COMPLETED`, `TOOL_LIMIT`, `TURNS_EXHAUSTED`, `DEADLINE`, `ERROR` или `SUSPENDED`.
+- **`$messages`** — полная история после прогона (без системного сообщения). Сохраните её, если разговор продолжится.
+- **`$turnsUsed`, `$toolCallsUsed`** — сколько оборотов и вызовов инструментов израсходовано.
+- **`$usage`** — токены, стоимость и разбивка по моделям, см. [09-usage-and-limits.md](09-usage-and-limits.md).
+- **`$modelKey`** — какая модель работала последней. Отличается от запрошенной, если при сбое произошло переключение на запасную.
+- **`$attempts`** — журнал попыток вызова модели: повторы и переключения.
+- **`$lastResponse`** — последний ответ модели целиком: размышления в `extra`, сырой payload в `raw`.
+- **`$suspended`, `$pendingToolCallIds`** — прогон встал на паузу и ждёт внешнего ввода, см. [13-human-in-the-loop.md](13-human-in-the-loop.md).
+
+## Тулбокс
+
+Тулбокс — это класс, который отдаёт циклу список инструментов и умеет исполнить любой из них по имени. Проще всего наследовать `AbstractToolbox` и реализовать один метод:
+
+```php
+<?php
 use Hameleon2x\Llm\Agent\AbstractToolbox;
 
 final class MyToolbox extends AbstractToolbox
 {
-    // Optional: inject obligatory `log_message` into every tool's schema.
-    protected bool    $withLogMessage        = true;
-    protected ?string $logMessageDescription = 'Short note for the dialog UI: what you are doing and why.';
-
-    // Called lazily once. Inject DI services into tool constructors here.
     protected function buildTools(): array
     {
         return [
-            new GetWeatherTool(/* $someService, $repository, ... */),
-            // ...
+            new GetWeatherTool($this->httpClient),   // сюда удобно передавать свои сервисы
+            new FindClientTool($this->clientRepository),
         ];
     }
 }
 ```
 
-`buildTools()` — DI-шов: тулзам обычно нужны реальные сервисы (HTTP-клиент, репозиторий, текущий пользователь, часы).
+`buildTools()` вызывается один раз и лениво — это место, где инструменты получают зависимости: репозитории, HTTP-клиенты, текущего пользователя.
 
-### `$withLogMessage` / `$logMessageDescription`
+Если ваш проект собирает инструменты иначе (например, читает их из базы), реализуйте `ToolboxInterface` напрямую — `Runner` работает с любой реализацией.
 
-Когда `$withLogMessage = true`, `SchemaBuilder` подмешивает обязательный строковый параметр `log_message` в JSON Schema каждой тулзы. Модель обязана прикладывать к каждому вызову короткую человекочитаемую заметку — удобно для чат-UI, которые хотят рендерить «Смотрю погоду в Москве…», не вычисляя это из имени тулзы и аргументов.
+### Пояснение вызова для интерфейса: `log_message`
 
-Имя параметра фиксировано (`SchemaBuilder::LOG_MESSAGE_PARAM = 'log_message'`). По умолчанию описание берётся из русского текста в `SchemaBuilder::LOG_MESSAGE_DESCRIPTION_DEFAULT`; переопределяй через `$logMessageDescription`, чтобы совпадало с языком твоего промта. `log_message` пробрасывается в `execute($args)` как обычный аргумент — тулза может его читать или игнорировать.
+Часто в интерфейсе хочется показать не «вызван get_weather», а человеческую строку «Смотрю погоду в Москве…». Чтобы такую строку писала сама модель, включите в тулбоксе `log_message`:
 
-## `Runner::run()`
+```php
+final class MyToolbox extends AbstractToolbox
+{
+    protected bool    $withLogMessage        = true;
+    protected ?string $logMessageDescription = 'Короткое пояснение: что делаешь этим вызовом и зачем.';
+
+    protected function buildTools(): array { /* ... */ }
+}
+```
+
+Тогда в схему каждого инструмента добавится обязательный строковый параметр `log_message`, и он придёт вместе с остальными аргументами — в инструменте его можно читать или игнорировать, а в интерфейс он попадёт через событие `TOOL_CALL` ([06-events.md](06-events.md)).
+
+## Сигнатура `run()`
 
 ```php
 public function run(
-    array            $messages,        // Message[]   — dialog history, no system message
+    array            $messages,        // Message[] — история без системного сообщения
     ToolboxInterface $toolbox,
     callable         $systemPromptFn,  // fn(Message[] $history): string
     Config           $config,
@@ -50,112 +159,37 @@ public function run(
 ): Result
 ```
 
-| Параметр          | Заметки                                                                                                            |
-|-------------------|--------------------------------------------------------------------------------------------------------------------|
-| `$messages`       | `Message[]` без `system`-записи. Runner собирает system-сообщение каждый ход через `$systemPromptFn`.              |
-| `$toolbox`        | Любой `ToolboxInterface`. Определения читаются один раз; `execute()` вызывается на каждый tool call.               |
-| `$systemPromptFn` | Вызывается каждый ход с текущей историей. Верни системный промт — используется as-is (без аугментации по тулзам).    |
-| `$config`         | `Agent\Dto\Config` — лимиты, оверрайды генерации, fallback-тексты (ниже).                                          |
-| `$emit`           | Опциональный приёмник событий — см. [06-events.md](06-events.md).                                                  |
+- **`$messages`** — история диалога. Системное сообщение сюда не кладут: его добавляет сам цикл.
+- **`$systemPromptFn`** — функция, возвращающая системный промт. Вызывается на каждом обороте и получает текущую историю, поэтому промт можно строить динамически. Возвращённый текст уходит в модель как есть.
+- **`$config`** — настройки прогона: модель, лимиты, параметры генерации. Полный разбор — [08-config-reference.md](08-config-reference.md).
+- **`$emit`** — необязательный приёмник событий: прогресс в интерфейсе, запись диалога в базу ([06-events.md](06-events.md)).
 
-## `Config`
+## Лимиты
 
-`Hameleon2x\Llm\Agent\Dto\Config` — ручки на один запуск:
+Два лимита защищают от бесконечной работы:
 
-| Поле                 | Тип            | По умолчанию | Значение                                                                                                |
-|----------------------|----------------|--------------|---------------------------------------------------------------------------------------------------------|
-| `maxTurns`           | `int`          | 10           | Жёсткий потолок на итерации цикла (1 итерация = 1 LLM-вызов + выполнение запрошенных тулз).              |
-| `maxToolCalls`       | `int`          | 30           | Жёсткий потолок на суммарное число вызовов тулз за запуск.                                               |
-| `temperature`        | `?float`       | `null`       | Переопределяет дефолт провайдера; `null` = не трогать.                                                   |
-| `maxTokens`          | `?int`         | `null`       | То же для лимита токенов.                                                                                |
-| `toolChoice`         | `string\|array`| `'auto'`     | `'auto'`, `'required'`, `'none'` или `['type' => 'function', 'function' => ['name' => 'foo']]`.          |
-| `plugins`            | `?array`       | `null`       | Плагины OpenRouter (например, web search) — пробрасываются как есть.                                     |
-| `limitNudgeMessage`  | `string`       | …            | User-сообщение, дописываемое перед финальным LLM-вызовом, когда исчерпан `maxToolCalls`.                 |
-| `limitFallbackText`  | `string`       | …            | Используется, если тот финальный LLM-вызов ничего не вернул.                                             |
-| `turnsExhaustedText` | `string`       | …            | Возвращается как ответ ассистента, когда достигнут `maxTurns`.                                           |
+- **`maxTurns`** — сколько раз можно обратиться к модели. Один оборот — один запрос, даже если модель попросила в нём пять инструментов сразу.
+- **`maxToolCalls`** — сколько инструментов можно исполнить за весь прогон.
 
-## `Result`
+Что происходит, когда они кончаются:
 
-`Hameleon2x\Llm\Agent\Dto\Result` — что возвращает `Runner::run()`:
+- **Исчерпан `maxToolCalls`.** Оставшиеся вызовы этого хода закрываются ошибкой, в историю добавляется сообщение `limitNudgeMessage` («данных больше не будет, дай итоговый ответ»), и делается ещё один запрос — уже без инструментов. Ответ модели становится результатом; если она промолчала, вернётся `limitFallbackText`. В обоих случаях `$success` равен `true`, а `$finish` — `Finish::TOOL_LIMIT`.
+- **Исчерпан `maxTurns`.** В историю дописывается `turnsExhaustedText`, он же попадает в `$content`. `$success` равен `true`, `$finish` — `Finish::TURNS_EXHAUSTED`.
 
-| Свойство         | Тип                 | Значение                                                                            |
-|------------------|---------------------|-------------------------------------------------------------------------------------|
-| `$success`       | `bool`              | `false` только если сам LLM-вызов провалился (`Response::isSuccess() === false`).   |
-| `$content`       | `?string`           | Финальный текст ассистента при успехе. `null` при ошибке.                           |
-| `$error`         | `?string`           | Текст ошибки при провале.                                                           |
-| `$messages`      | `Message[]`         | Полный диалог после запуска (без system). Сохраняй, если планируешь продолжать.     |
-| `$turnsUsed`     | `int`               | Потрачено итераций (1..`maxTurns`).                                                 |
-| `$toolCallsUsed` | `int`               | Потрачено вызовов тулз (0..`maxToolCalls`).                                         |
-| `$usage`         | `Agent\Dto\Usage`   | `llmCalls`, `promptTokens`, `completionTokens`, `totalTokens` за весь запуск.       |
-| `$suspended`         | `bool`      | `true`, когда прогон встал на паузу на suspend-тулзе в ожидании внешнего ввода (human-in-the-loop). `$content` / `$error` — `null`. |
-| `$pendingToolCallIds`| `string[]`  | При `$suspended` — id вызовов, чьи результаты нужно подать для возобновления; см. [13-human-in-the-loop.md](13-human-in-the-loop.md). |
+Оба случая — не ошибка, а нормальное завершение по бюджету. Отличить их от полноценного ответа помогает `$finish`.
 
-Упор в `maxTurns` или `maxToolCalls` даёт `success = true` с одним из настроенных fallback-текстов в `$content` — это не ошибка, запуск завершился штатно. Смотри `$turnsUsed` / `$toolCallsUsed`, чтобы поймать насыщение.
+Третий ограничитель — срок: `$config->deadlineSeconds`. Он проверяется перед каждым оборотом, и при истечении прогон возвращает ошибку категории `deadline` вместе с полной историей: собранные результаты инструментов не теряются.
 
-## Пояснения по тулзам: хинты при первом вызове в результате
+## Подсказка при первом вызове инструмента
 
-Каждый ход runner вызывает `$systemPromptFn($messages)` и берёт полученный системный промт as-is — он неизменен между оборотами. Пояснения по тулзам доставляются иначе: когда `executeToolCalls` собирает tool-сообщение с результатом, он проверяет, первый ли это вызов данной тулзы в истории (`isFirstUse`). Если да — зовёт `$toolbox->firstUseHint($name)` и, если текст непустой, кладёт его в JSON-результат под ключом `$toolbox->firstUseHintKey($name)` (дефолт `hint_use`). Пояснение едет вместе с собственным выводом тулзы, один раз за диалог, дописанное в хвост истории — префикс запроса остаётся байт-в-байт стабильным, и prompt-кеш провайдера продолжает попадать.
+У инструмента бывает неочевидный формат ответа — например, поля `docId` и `sources[]`, которые модель должна использовать определённым образом. Такое пояснение не стоит держать в системном промте: он уходит в модель при каждом запросе и стоит токенов даже тогда, когда инструмент не используется.
 
-## Что происходит при исчерпании лимитов
-
-- **`maxToolCalls` исчерпан посреди хода.** `Runner::finishOnToolLimit()` дописывает `Config::$limitNudgeMessage` как `user`-сообщение и делает один финальный LLM-вызов **без тулз**. Если модель ответит — это и будет ответ; иначе — `Config::$limitFallbackText`. В любом случае `success = true`.
-- **Достигнут `maxTurns`.** Runner дописывает `Config::$turnsExhaustedText` как сообщение ассистента и возвращает `success = true`.
-
-## Полный пример
-
-```php
-<?php
-declare(strict_types=1);
-
-require __DIR__ . '/vendor/autoload.php';
-
-use App\Llm\Tools\GetWeatherTool;
-use App\Llm\Tools\TimeNowTool;
-use Hameleon2x\Llm\Agent\AbstractToolbox;
-use Hameleon2x\Llm\Agent\Dto\Config;
-use Hameleon2x\Llm\Agent\Runner;
-use Hameleon2x\Llm\Client;
-use Hameleon2x\Llm\Dto\Message;
-use Hameleon2x\Llm\Provider\OpenAiProvider;
-
-final class WeatherToolbox extends AbstractToolbox
-{
-    protected bool $withLogMessage = true;
-    protected function buildTools(): array
-    {
-        return [new GetWeatherTool(), new TimeNowTool()];
-    }
-}
-
-$client = new Client();
-$client->providers = [
-    ['class' => OpenAiProvider::class, 'token' => 'sk-...', 'model' => 'gpt-4o-mini'],
-];
-
-$config = new Config();
-$config->maxTurns = 5;
-$config->maxToolCalls = 10;
-$config->temperature = 0.3;
-
-$result = (new Runner($client))->run(
-    [Message::user('What is the weather in Moscow right now?')],
-    new WeatherToolbox(),
-    static fn(array $history): string => 'You are a concise weather assistant. Use tools when you need facts.',
-    $config
-);
-
-echo $result->success ? $result->content : "Run failed: {$result->error}";
-printf(
-    "\nturns=%d toolCalls=%d llmCalls=%d tokens=%d\n",
-    $result->turnsUsed, $result->toolCallsUsed,
-    $result->usage->llmCalls, $result->usage->totalTokens
-);
-```
+Вместо этого цикл подмешивает пояснение в результат инструмента при **первом** его вызове в диалоге: `$toolbox->firstUseHint($name)` кладётся в JSON-ответ под ключом `$toolbox->firstUseHintKey($name)` (по умолчанию `hint_use`). Один раз за диалог, в хвост истории — начало запроса остаётся неизменным, и кеш промпта у провайдера продолжает срабатывать.
 
 ## См. также
 
-- [04-tools.md](04-tools.md) — контракт `ToolInterface`.
-- [06-events.md](06-events.md) — `$emit`-callback для прогресса внутри цикла.
-- [13-human-in-the-loop.md](13-human-in-the-loop.md) — пауза цикла на внешний ввод (`Result::suspend()`) и возобновление.
-- [02-providers-and-fallback.md](02-providers-and-fallback.md) — как нижележащий `Client` выбирает провайдера.
-- [03-logging.md](03-logging.md) — отдельный PSR-3 канал для повторов и fallback.
+- [04-tools.md](04-tools.md) — как написать инструмент.
+- [06-events.md](06-events.md) — события цикла: прогресс, повторы, переключение модели.
+- [08-config-reference.md](08-config-reference.md) — все настройки прогона.
+- [13-human-in-the-loop.md](13-human-in-the-loop.md) — пауза цикла ради ответа пользователя.
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — как выбирается модель и что происходит при её сбое.

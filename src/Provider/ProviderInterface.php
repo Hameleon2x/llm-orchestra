@@ -2,22 +2,31 @@
 
 namespace Hameleon2x\Llm\Provider;
 
-use Hameleon2x\Llm\Dto\Request;
+use Hameleon2x\Llm\Dto\ResolvedCall;
 use Hameleon2x\Llm\Dto\Response;
 use Hameleon2x\Llm\Exception\LlmException;
 
 /**
- * Интерфейс провайдера LLM.
+ * Транспорт до конкретного API: собрать payload, отправить, разобрать ответ.
+ *
+ * Провайдер намеренно ничего не решает: повторы, переключение моделей и слияние настроек делает
+ * Orchestra, а сюда приходит готовый ResolvedCall. Поэтому свой провайдер — это один метод.
+ *
+ * Каталог создаёт провайдера как `new $class($definition, $logger)` — конструктор с такой
+ * сигнатурой обязателен (см. BaseProvider).
  */
 interface ProviderInterface
 {
     /**
-     * @throws LlmException
+     * Выполнить вызов.
+     *
+     * @throws LlmException при любом сбое — с категорией в ErrorInfo
      */
-    public function execute(Request $request): Response;
+    public function execute(ResolvedCall $call): Response;
 
-    public function getName(): string;
+    /** Ключ провайдера в каталоге. */
+    public function key(): string;
 
-    /** Приоритет провайдера: меньше = выше. */
-    public function getPriority(): int;
+    /** Человекочитаемое имя провайдера для логов. */
+    public function name(): string;
 }

@@ -2,123 +2,142 @@
 
 namespace Hameleon2x\Llm\Dto;
 
-use Hameleon2x\Llm\Enum\Status;
-use Throwable;
+use Hameleon2x\Llm\Error\ErrorInfo;
+use Hameleon2x\Llm\Support\ArrayPath;
 
 /**
- * Ответ от LLM.
+ * Ответ модели.
+ *
+ * Три слоя данных, чтобы библиотека не переписывалась каждый раз, когда провайдер добавляет поле:
+ *   - типизированное (content, toolCalls, usage) — на этом работает движок;
+ *   - extra — данные провайдера, приведённые к нашим именам картой capture;
+ *   - raw — ответ целиком, как пришёл.
+ *
+ * Ошибки: успех — это error === null. Категория сбоя лежит в ErrorInfo, разбирать сообщения
+ * провайдеров строками не нужно.
  */
-class Response
+final class Response
 {
-    /** Статус из Status::* */
-    public string $status;
-
-    /** Класс провайдера, который вернул ответ */
-    public string $provider;
-
-    public string $model;
-    public ?string $content;
+    /** Текст ответа. null, если модель вернула только вызовы инструментов или произошёл сбой. */
+    public ?string $content = null;
 
     /** @var ToolCall[] */
-    public array $toolCalls;
+    public array $toolCalls = [];
 
-    /** Метаданные: токены, latency, attempts и т.д. */
-    public array $metadata;
+    public Usage $usage;
 
-    public ?string $error;
-    public ?Throwable $exception;
+    /** Ключ модели каталога, которая фактически ответила (может отличаться от запрошенной). */
+    public string $modelKey = '';
+
+    /** Слаг модели, который ушёл в API. */
+    public string $modelName = '';
+
+    /** Ключ провайдера каталога. */
+    public string $providerKey = '';
+
+    /** Служебное: finishReason, latency, attempts. */
+    public array $metadata = [];
+
+    /** Данные провайдера по карте capture: reasoning, annotations, refusal и т. п. */
+    public array $extra = [];
+
+    /** Сбой вызова; null при успехе. */
+    public ?ErrorInfo $error = null;
+
+    /** @var AttemptLog[] журнал попыток, включая переключения на другие модели */
+    public array $attempts = [];
+
+    /** Сырой ответ провайдера; null, если провайдер настроен его не хранить. */
+    private ?array $rawData = null;
+
+    public function __construct()
+    {
+        $this->usage = new Usage();
+    }
 
     /**
-     * @param ToolCall[] $toolCalls
+     * Неуспешный ответ по разобранной ошибке.
      */
-    public function __construct(
-        string     $status,
-        string     $provider,
-        string     $model,
-        ?string    $content = null,
-        array      $toolCalls = [],
-        array      $metadata = [],
-        ?string    $error = null,
-        ?Throwable $exception = null
-    )
+    public static function failed(ErrorInfo $error): self
     {
-        $this->status = $status;
-        $this->provider = $provider;
-        $this->model = $model;
-        $this->content = $content;
-        $this->toolCalls = $toolCalls;
-        $this->metadata = $metadata;
-        $this->error = $error;
-        $this->exception = $exception;
+        $response = new self();
+        $response->error = $error;
+        $response->modelKey = $error->modelKey;
+        $response->providerKey = $error->providerKey;
+
+        return $response;
     }
 
     public function isSuccess(): bool
     {
-        return $this->status === Status::SUCCESS;
+        return $this->error === null;
     }
 
     public function hasToolCalls(): bool
     {
-        return !empty($this->toolCalls);
+        return $this->toolCalls !== [];
     }
 
-    public function getTotalTokens(): int
+    /**
+     * Модель не сказала ничего: ни текста, ни вызовов инструментов.
+     */
+    public function isEmpty(): bool
     {
-        return $this->metadata['totalTokens'] ?? 0;
+        return trim((string)$this->content) === '' && $this->toolCalls === [];
     }
 
-    public function getPromptTokens(): int
+    /**
+     * Данные провайдера по имени из карты capture.
+     *
+     * @return mixed
+     */
+    public function extra(string $key, $default = null)
     {
-        return $this->metadata['promptTokens'] ?? 0;
+        return $this->extra[$key] ?? $default;
     }
 
-    public function getCompletionTokens(): int
+    /**
+     * Сырой ответ целиком или его часть по пути `choices.0.message.reasoning_content`.
+     *
+     * @return mixed
+     */
+    public function raw(?string $path = null)
     {
-        return $this->metadata['completionTokens'] ?? 0;
+        if ($this->rawData === null) {
+            return null;
+        }
+        if ($path === null) {
+            return $this->rawData;
+        }
+
+        return ArrayPath::get($this->rawData, $path);
     }
 
-    /** Время выполнения запроса в секундах */
-    public function getLatency(): float
+    public function setRaw(?array $raw): void
     {
-        return $this->metadata['latency'] ?? 0.0;
+        $this->rawData = $raw;
     }
 
-    public static function success(
-        string  $provider,
-        string  $model,
-        ?string $content = null,
-        array   $toolCalls = [],
-        array   $metadata = []
-    ): self
+    /**
+     * Причина завершения генерации от провайдера: stop, length, tool_calls, content_filter.
+     */
+    public function finishReason(): ?string
     {
-        return new self(
-            Status::SUCCESS,
-            $provider,
-            $model,
-            $content,
-            $toolCalls,
-            $metadata
-        );
+        return $this->metadata['finishReason'] ?? null;
     }
 
-    public static function error(
-        string     $status,
-        string     $provider,
-        string     $model,
-        string     $error,
-        ?Throwable $exception = null,
-        array      $metadata = []
-    ): self
+    /**
+     * Ответ оборван по лимиту токенов. Для текста это потеря хвоста, для вызова инструмента —
+     * почти всегда битые аргументы.
+     */
+    public function isTruncated(): bool
     {
-        return new self(
-            $status,
-            $provider,
-            $model,
-            null,
-            [],
-            $metadata,
-            $error,
-            $exception
-        );
+        return $this->finishReason() === 'length';
+    }
+
+    /** Длительность вызова, секунды (без пауз между попытками). */
+    public function latency(): float
+    {
+        return (float)($this->metadata['latency'] ?? 0.0);
     }
 }

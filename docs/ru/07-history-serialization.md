@@ -17,13 +17,13 @@
 
 [`MessageFactory::toArray()`](../../src/Factory/MessageFactory.php) выдаёт ассоциативный массив, ключи которого совпадают со схемой сообщения OpenAI Chat Completions — этот массив уходит провайдерам напрямую, без дополнительного маппинга.
 
-| Ключ            | Когда присутствует                                           | Примечания                                                            |
-|-----------------|--------------------------------------------------------------|-----------------------------------------------------------------------|
-| `role`          | всегда                                                       | `system`, `user`, `assistant` или `tool` (см. [Role](../../src/Enum/Role.php)) |
-| `content`       | когда не null                                                | текстовый payload; для сообщений `tool` — JSON-результат тулзы        |
-| `name`          | когда не null                                                | опциональное имя говорящего                                           |
-| `tool_calls`    | когда сообщение ассистента породило вызовы тулз              | массив, каждый элемент — `['id' => ..., 'type' => 'function', 'function' => ['name' => ..., 'arguments' => '...']]` |
-| `tool_call_id`  | только в сообщениях `role: tool`                             | id вызова тулзы ассистента, на который отвечает этот результат        |
+Ключи массива:
+
+- **`role`** — есть всегда: `system`, `user`, `assistant` или `tool` (см. [Role](../../src/Enum/Role.php)).
+- **`content`** — текст сообщения, когда он есть. Для сообщений роли `tool` это JSON-результат инструмента.
+- **`name`** — необязательное имя говорящего, если оно задано.
+- **`tool_calls`** — появляется в сообщении ассистента, которое запросило вызовы инструментов. Каждый элемент: `['id' => ..., 'type' => 'function', 'function' => ['name' => ..., 'arguments' => '...']]`.
+- **`tool_call_id`** — только в сообщениях роли `tool`: id вызова, на который отвечает этот результат.
 
 `MessageFactory::fromArray()` — обратное преобразование: толерантно к отсутствующим полям, игнорирует неизвестные ключи.
 
@@ -34,11 +34,11 @@
 require __DIR__ . '/vendor/autoload.php';
 
 use Hameleon2x\Llm\Agent\Runner;
-use Hameleon2x\Llm\Client;
+use Hameleon2x\Llm\Orchestra;
 use Hameleon2x\Llm\Dto\Message;
 use Hameleon2x\Llm\Factory\MessageFactory;
 
-/** @var Client $client */
+/** @var Orchestra $orchestra */
 /** @var \Hameleon2x\Llm\Agent\ToolboxInterface $toolbox */
 /** @var \Hameleon2x\Llm\Agent\Dto\Config $config */
 
@@ -50,7 +50,7 @@ $messages   = array_map([MessageFactory::class, 'fromArray'], $rawHistory);
 $messages[] = Message::user($_POST['text']);
 
 // 3. Run the agent.
-$runner = new Runner($client);
+$runner = new Runner($orchestra);
 $result = $runner->run($messages, $toolbox, fn() => 'You are a helpful assistant', $config);
 
 // 4. Send the new history back.
@@ -77,7 +77,7 @@ $object = ToolCallFactory::fromArray($array);
 
 ## Сериализация определений тулз
 
-Если вы передаёте определения тулз по сети (например, воркеру, который зовёт `Client::execute()` напрямую), используйте [`ToolDefinitionFactory::toArray()`](../../src/Factory/ToolDefinitionFactory.php): `$payload = array_map([ToolDefinitionFactory::class, 'toArray'], $tools);`. `fromArray()` нет — определения тулз создаются вашими реализациями `ToolInterface`, а не восстанавливаются из недоверенного ввода. Собирайте их на стороне сервера.
+Если вы передаёте определения тулз по сети (например, воркеру, который зовёт `Orchestra::execute()` напрямую), используйте [`ToolDefinitionFactory::toArray()`](../../src/Factory/ToolDefinitionFactory.php): `$payload = array_map([ToolDefinitionFactory::class, 'toArray'], $tools);`. `fromArray()` нет — определения тулз создаются вашими реализациями `ToolInterface`, а не восстанавливаются из недоверенного ввода. Собирайте их на стороне сервера.
 
 Примечания: не включайте системное сообщение в передаваемую историю — `Runner` пересобирает его каждый ход через callable `$systemPromptFn`. Формат намеренно OpenAI-совместимый: тот же массив можно отправить любому OpenAI-совместимому API.
 

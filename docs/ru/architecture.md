@@ -2,107 +2,80 @@
 
 # Архитектура
 
-Как пакет разделён на слои, что принадлежит каждому слою и что через него течёт.
+Карта пакета: из чего он состоит, кто за что отвечает и как проходит один запрос.
 
 ## Слои
 
 ```
-Agent      Runner / Toolbox / Tool  (multi-turn loop, tools)
-   |
-Client     fallback chain, PSR-3 logging, generation defaults
-   |
-Provider   Request -> wire format -> Response               (retry loop with backoff)
-   |
-Http       ChatClientInterface — POST /v1/chat/completions  (default: CurlChatClient)
-   |
-Network    HTTPS to OpenAI / OpenRouter / Requesty / yours
+Agent\Runner            агентский цикл: ходы, инструменты, лимиты, пауза ради внешнего ввода
+      │
+Orchestra               выбор модели, повторы, переключение на следующую модель цепочки
+      │
+Registry                каталог: провайдеры, модели, дефолтные параметры, политика, цепочка
+      │
+Provider\*              формат API: payload → HTTP → разбор ответа
+      │
+Http\ChatClientInterface  транспорт (по умолчанию cURL)
 ```
 
-Каждый слой общается только с тем, что под ним. На границах — конкретные PHP-типы:
+Каждый слой ниже ничего не знает о слое выше. Провайдер не решает, повторять ли запрос; `Orchestra` не знает про инструменты; `Runner` не знает, какой моделью в итоге отвечали — он берёт ключ из ответа.
 
-| Граница                   | Тип / интерфейс                                                    |
-|---------------------------|--------------------------------------------------------------------|
-| Agent ↔ Client            | [`Request`](../../src/Dto/Request.php), [`Response`](../../src/Dto/Response.php) |
-| Client ↔ Provider         | [`ProviderInterface`](../../src/Provider/ProviderInterface.php)    |
-| Provider ↔ Http           | [`ChatClientInterface`](../../src/Http/ChatClientInterface.php)    |
-| Provider ↔ Agent (тулзы)  | [`ToolDefinition`](../../src/Dto/ToolDefinition.php), [`ToolCall`](../../src/Dto/ToolCall.php) |
+## Ответственности
 
-## Поток: `Client::execute()`
+- **`Registry`** — каталог и его проверка, резолв ключей и алиасов, политика и цепочка по умолчанию. Запросы не выполняет.
+- **`Orchestra`** — слияние настроек, повторы, переключение моделей, журнал попыток, запись в PSR-3. Про формат API и содержимое диалога не знает.
+- **`Provider\*`** — сборка payload и разбор ответа, классификация сбоев. Повторов не делает и модель не выбирает.
+- **`Http\CurlChatClient`** — отправка HTTP и транспортные ошибки. Тело ответа не разбирает.
+- **`Agent\Runner`** — цикл оборотов, исполнение инструментов, лимиты, возобновление. Повторы и переключение моделей не его дело.
+- **`Tool\*`, `Agent\Toolbox*`** — схемы и исполнение инструментов. С моделью не общаются.
 
-```
-caller --Request--> Client.execute
-  for each provider in priority order:
-    Provider.execute (BaseProvider)  retry loop (attempts × backoff)
-      Provider.doExecute (OpenAiProvider / yours)
-        Request -> API payload
-        ChatClientInterface.chat -> raw JSON
-        parse -> Response (+ metadata.latency/attempt)
-    if Response.isSuccess() -> return
-    else / on LlmException / on Throwable -> log, next provider
-  all failed -> return last Response::error
-caller <--Response--
-```
+## Путь одного запроса
 
-Повторы внутри одного провайдера: 1с → 2с → 4с → 8с (потолок 10с). Fallback между провайдерами: `Client` переходит к следующему всякий раз, когда провайдер бросает исключение или возвращает неуспешный `Response`. Ни один слой не бросает исключения наружу — сбои закодированы в `Response::$status` + `Response::$error`. См. [docs/10-error-handling.md](10-error-handling.md).
+1. `Orchestra::execute($request, $modelKey)` резолвит модель по каталогу (ключ, алиас или `defaultModel`).
+2. `ResolvedCall::build()` сливает три уровня: каталог → модель → вызов. Параметры генерации по явности, произвольные поля и заголовки рекурсивно, `unsupported` вырезается поверх всего.
+3. Провайдер собирает payload, зовёт транспорт, разбирает ответ и применяет карту `capture`.
+4. Успех — `Response` с `content`/`toolCalls`, `usage`, `extra` и сырым ответом. Сбой — `LlmException` с категорией.
+5. `Orchestra` записывает попытку в журнал, уведомляет наблюдателя и решает: повторить, передать следующей модели цепочки или вернуть ошибку.
+6. `Runner` (если работает он) исполняет вызовы инструментов, дописывает историю и идёт на следующий оборот — уже на той модели, которая ответила.
 
-## Поток: `Runner::run()`
+## Ключевые решения
 
-```
-caller --messages, toolbox, systemPromptFn, config--> Runner.run
-  for each turn (up to config.maxTurns):
-    systemPrompt = systemPromptFn(history)   // as-is, без изменений
-    Response = Client.execute(Request{system + history + tools})
-    Usage.add(Response)
-    if !Response.isSuccess()      -> Result::error
-    if !Response.hasToolCalls()   -> append assistant msg, Result::success
-    for each tool_call:
-      Toolbox.execute(name, args) -> Tool\Dto\Result
-      append Message::tool(toolCallId, json(result))
-      emit Event::TOOL_CALL / Event::TOOL_RESULT
-      if maxToolCalls exhausted   -> finishOnToolLimit, Result::success
-  maxTurns exhausted              -> Result::success with turnsExhaustedText
-caller <--Result--
-```
+**Единица выбора — модель.** Провайдер описывает транспорт, модель — то, что зовут. Одна и та же модель у двух провайдеров — две записи каталога, поэтому слаги не путаются, а `supportedModels` и `priority` не нужны.
 
-Системный промт неизменен между оборотами — `$systemPromptFn` используется as-is. `firstUseHint()` тулзы подмешивается в её **результат** (под ключом `firstUseHintKey()`, дефолт `hint_use`) при первом вызове этой тулзы в диалоге, поэтому пояснения по тулзам едут вместе с данными, а не меняют префикс промта. `Tool\Dto\Result` — типизированный возврат каждой тулзы, сериализуется в JSON для сообщения `tool`. `Usage` накапливает счётчики токенов — см. [docs/09-usage-and-limits.md](09-usage-and-limits.md).
+**Цепочка фолбэка одна и плоская.** У моделей нет собственных списков продолжения — иначе пришлось бы отвечать, чей список главнее при вложенном сбое. Уже опробованные модели пропускаются, число переключений ограничено.
 
-## Структура исходников
+**Один уровень повторов.** Транспорт не крутит свой цикл, повторы считает политика модели. Два уровня перемножались бы, и время ожидания было бы непредсказуемым.
+
+**Ошибка — это категория.** Тексты провайдеров нестабильны, поэтому единственное место их разбора — `ErrorMapper`, а наружу уходит `ErrorInfo` с категорией, статусом и сырым телом.
+
+**Ответ не выбрасывается.** Типизировано только то, на чём работает движок; остальное доступно через `extra` (нормализованное картой `capture`) и `raw` (как пришло). Новое поле у провайдера не требует релиза библиотеки.
+
+**Ничего не бросается наружу.** `Orchestra` и `Runner` возвращают результат со сбоем внутри; исключения остаются внутренним механизмом провайдеров.
+
+## Состояние
+
+Пакет не хранит состояния между вызовами. `Registry` и `Orchestra` иммутабельны по конфигурации (`with*` возвращают копии), `Runner` не держит истории — она приходит и возвращается массивом сообщений. Приостановленный прогон возобновляется тем же `run()` с дописанными ответами инструментов, отдельного resume-API нет.
+
+## Карта каталогов
 
 ```
 src/
-├── Client.php                              fallback chain, PSR-3 logging, withProviders()
-├── Agent/
-│   ├── Runner.php                          agent loop
-│   ├── ToolboxInterface.php / AbstractToolbox.php
-│   ├── Dto/{Config,Result,Usage}.php       per-run params / result / token counters
-│   └── Enum/Event.php                      events emitted via $emit
-├── Provider/
-│   ├── ProviderInterface.php / BaseProvider.php  retry loop, allowlist, exception → Status
-│   ├── OpenAiProvider.php                  OpenAI-compatible (default)
-│   ├── OpenRouterProvider.php              OpenAiProvider + openrouter.ai
-│   └── RequestyProvider.php                OpenAiProvider + router.requesty.ai
-├── Http/{ChatClientInterface,CurlChatClient}.php
-├── Dto/{Request,Response,Message,ToolCall,ToolDefinition}.php
-├── Factory/{Message,ToolCall,ToolDefinition}Factory.php   ↔ array (OpenAI shape)
-├── Tool/
-│   ├── ToolInterface.php / AbstractTool.php
-│   ├── SchemaBuilder.php                   Property[] → JSON Schema parameters
-│   └── Dto/{Property,Result}.php           property descriptor / typed tool result
-├── Exception/{LlmException,LlmProviderException,LlmRateLimitException,LlmValidationException}.php
-└── Enum/{Role,Status}.php
+  Registry.php            каталог
+  Orchestra.php           исполнение с политикой
+  Config/                 определения: провайдер, модель, параметры, политика
+  Dto/                    Request, Response, Message, ToolCall, Usage, AttemptLog, ResolvedCall
+  Error/                  ErrorCategory, ErrorInfo, ErrorMapper
+  Exception/              LlmException, LlmConfigException
+  Http/                   ChatClientInterface, CurlChatClient
+  Provider/               ProviderInterface, BaseProvider, OpenAi/OpenRouter/Requesty
+  Agent/                  Runner, Config, Result, Finish, Event, Toolbox
+  Tool/                   AbstractTool, SchemaBuilder, ToolArgsGuard, Dto
+  Factory/                Message/ToolCall/ToolDefinition ↔ массив
+  Support/                ArrayPath, Merge, Sleeper
 ```
-
-## Зачем столько слоёв
-
-- **Http vs Provider** — HTTP-транспорт (cURL, Guzzle, fake) ортогонален формату API. См. [docs/11-custom-http-client.md](11-custom-http-client.md).
-- **Provider vs Client** — провайдер знает один формат API; клиент держит fallback и PSR-3. См. [docs/02-providers-and-fallback.md](02-providers-and-fallback.md).
-- **Client vs Agent** — `Client::execute()` — одношаговый RPC; `Runner` — stateful-цикл с тулзами и лимитами на прогон.
-- **DTOs vs Factories** — типизированные DTO (`Message`, `ToolCall`, `ToolDefinition`) плюс фабрики, выдающие массивы в форме OpenAI — и для формата API провайдера, и для транспорта между фронтом и бэком. См. [docs/07-history-serialization.md](07-history-serialization.md).
 
 ## См. также
 
-- [docs/01-getting-started.md](01-getting-started.md) — минимальный сквозной пример.
-- [docs/02-providers-and-fallback.md](02-providers-and-fallback.md) — приоритет провайдеров и fallback.
-- [docs/05-toolbox-and-runner.md](05-toolbox-and-runner.md) — агентский цикл в деталях.
-- [docs/10-error-handling.md](10-error-handling.md) — режимы отказа и статусы.
-- [docs/12-custom-provider.md](12-custom-provider.md) — добавить новый формат API.
+- [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — каталог целиком.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — агентский цикл.
+- [10-error-handling.md](10-error-handling.md) — ошибки и повторы.
