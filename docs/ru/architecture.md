@@ -69,7 +69,7 @@ src/
   Exception/              LlmException, LlmConfigException
   Http/                   ChatClientInterface, CurlChatClient
   Provider/               ProviderInterface, BaseProvider, OpenAi/OpenRouter/Requesty
-  Agent/                  Runner, Config, Result, Finish, Event, Toolbox
+  Agent/                  Runner, RunOptions, Result, Finish, Event, Toolbox, AttemptObserver
   Tool/                   ToolInterface, AbstractTool, SchemaBuilder, ToolArgsGuard, Dto
   Factory/                Message/ToolCall/ToolDefinition ↔ массив
   Support/                ArrayPath, Merge, Sleeper, SleeperInterface

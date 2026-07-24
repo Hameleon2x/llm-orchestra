@@ -154,7 +154,7 @@ public function run(
     array            $messages,        // Message[] — history without the system message
     ToolboxInterface $toolbox,
     callable         $systemPromptFn,  // fn(Message[] $history): string
-    Config           $options,
+    RunOptions       $options,
     ?callable        $emit = null      // fn(string $event, string $content, array $meta): void
 ): Result
 ```
