@@ -98,14 +98,48 @@ if (!$result->success && $result->error !== null) {   // у приостанов
 - Ручные циклы «повторить прогон при обрыве связи» уберите: повторы и переключение моделей делает `Orchestra`, а в интерфейс они приходят событиями `Event::ATTEMPT_FAILED` и `Event::MODEL_FALLBACK`.
 - Проверка аргументов инструментов включена по умолчанию (`Config::$toolArgsGuard`); свою такую же уберите.
 
-### 5. Мелочи
+### 5. Свой провайдер
+
+Провайдер отвечает только за формат API: собрать payload, отправить, разобрать ответ. Слияние настроек, повторы и переключение моделей ушли в `Orchestra`.
+
+```php
+// было
+class MyProvider extends BaseProvider
+{
+    // конструктор: (token, model, baseUrl, temperature, topP, maxTokens, retryAttempts, timeout, priority, supportedModels, logger)
+    protected function doExecute(Request $request): Response { ... }
+}
+
+// стало — конструктор (ProviderDefinition $definition, ?LoggerInterface $logger = null)
+class MyProvider extends BaseProvider
+{
+    protected function defaultBaseUrl(): string { return 'https://api.example.com'; }
+    protected function endpointPath(): string   { return '/v1/chat/completions'; }
+
+    public function execute(ResolvedCall $call): Response { ... }
+}
+```
+
+- `ProviderInterface::execute()` принимает `ResolvedCall` вместо `Request`: параметры провайдера, модели и вызова уже слиты, слаг модели, заголовки и таймаут лежат в вызове.
+- `getName()` и `getPriority()` удалены: провайдер называется своим ключом в каталоге, а порядок задаёт `fallback`.
+- Публичные свойства `BaseProvider` (`$token`, `$model`, `$baseUrl`, `$temperature`, `$topP`, `$maxTokens`, `$retryAttempts`, `$timeout`, `$priority`, `$supportedModels`) и методы `doExecute()`, `getModel()`, `isModelSupported()`, `getStatusFromException()`, `sleep()` удалены — всё это либо приходит в `ResolvedCall`, либо больше не нужно.
+- Ошибку провайдер бросает как `LlmException` с `ErrorInfo`, а не возвращает `Response::error()`.
+- Ради одного адреса или лишних полей payload свой класс писать не нужно — хватит `baseUrl`, `headers` и `extraParams` в каталоге. Полный пример: [docs/ru/12-custom-provider.md](docs/ru/12-custom-provider.md).
+
+### 6. Мелочи
 
 - `Agent\Dto\Usage` → `Dto\Usage`.
-- `Response::$model` (слаг) теперь `$modelName`; появился `$modelKey` — ключ каталога.
+- У вызова появился потолок времени по умолчанию: `maxTotalWaitSeconds` каталога равен 600 секундам. Если у вас есть модели, которые сами отвечают дольше десяти минут, поднимите его или снимите явным `null`.
+- `Response::$model` (слаг) теперь `$modelName`; появился `$modelKey` — ключ каталога, а `$provider` стал `$providerKey`.
+- `Response::getTotalTokens()`, `getPromptTokens()`, `getCompletionTokens()` удалены — счётчики лежат в `$response->usage`; `getLatency()` → `latency()`; `$status` удалён (причина сбоя — категория в `$error`).
+- `Response::success()` и `Response::error()` удалены: ответ собирает провайдер, для сбоя есть `Response::failed(ErrorInfo)`.
+- `LlmException::isRetryable()` и `$retryable` удалены: `$e->info()->retryable`, категория — `$e->category()`.
+- Поля `Request::$temperature`, `$topP`, `$maxTokens`, `$seed` собраны в `$params` (`GenerationParams`); сеттеры остались. `setPlugins()` → `setExtraParams()`.
+- `Config::$maxTurns` по умолчанию 40 вместо 10: лимит оборотов должен срабатывать позже лимита вызовов инструментов, иначе прогон заканчивается служебной заглушкой вместо ответа модели.
+- `Agent\Dto\Result` создаётся только фабриками (`Result::success()`, `error()`, `suspended()`) — конструктор закрыт.
 - Свой HTTP-клиент подставляется конфигом провайдера (`'httpClient' => $client`), а его метод принимает заголовки и таймаут: `chat(array $payload, array $headers = [], ?int $timeout = null)`.
 - Отладочная константа `CurlChatClient::DEBUG` заменена на `'debug' => true` в конфиге провайдера (пишет в PSR-3).
 - Конструктор `CurlChatClient` принимает готовый адрес эндпоинта первым аргументом: `(string $url, string $token, int $timeout = 120, bool $debug = false, ?LoggerInterface $logger = null)`. Раньше первым шёл токен, а путь `/v1/chat/completions` дописывал сам транспорт. Прямые вызовы `new CurlChatClient($token, $baseUrl)` нужно переписать — иначе запрос уйдёт по адресу, собранному из токена.
-- `ProviderInterface::key()` и `name()` удалены: свой провайдер их больше не реализует.
 - Фабрика своего HTTP-клиента получает вторым аргументом готовый адрес эндпоинта: `function(ProviderDefinition $definition, string $url)`. Склеивать путь из `baseUrl` вручную больше не нужно (и `baseUrl` мог быть `null`).
 
 ## 0.2.x → 0.3.x

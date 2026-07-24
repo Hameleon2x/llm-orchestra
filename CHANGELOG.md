@@ -25,12 +25,15 @@ The unit of choice is now the model, not the provider. Model catalog, one flat f
 - **The API format belongs to the provider, not the transport.** The endpoint path comes from `BaseProvider::endpointPath()`, the `stream` field is set by `OpenAiProvider`, and `CurlChatClient` receives a ready URL as its first constructor argument. A provider with a different path no longer needs its own transport. A custom client factory also receives the ready URL as its second argument.
 - **The run deadline holds inside a turn.** `Config::$deadlineSeconds` is projected onto every executor call through `Orchestra::withTotalWaitSeconds()`, so retries and switches cannot carry the run past it.
 - **The time caps are now hard:** the request timeout is clamped by what is left of the call budget, so a request never outlives `maxTotalWaitSeconds` or the run deadline.
-- **Transport configuration errors** (a malformed URL, an unknown protocol, a certificate problem — cURL 1/3/60/77) now map to category `config`: retrying them or switching models changes nothing.
+- **Transport configuration errors** (a malformed URL, an unknown protocol, a certificate problem — cURL 1/3/60/77, plus a redirect in reply to a POST) now map to category `config`: retrying them or switching models changes nothing.
 - **A PHP-level error** (`TypeError` and other `\Error`s) is no longer treated as a temporary failure: category `config`, no retries and no model switching.
+- **A typo in a config value no longer passes silently:** `then`, the categories in `retryOn`, `stopOn` and `perCategory`, and the names in `unsupported` are checked against the allowed sets while the catalog is built. Otherwise `'Stop'` instead of `'stop'` would quietly permit the very model switching it is meant to forbid, and a non-empty `retryOn` without a single real category would disable retries entirely.
 - **A failure in application code no longer costs you the history:** an exception from the system prompt or the tool registry comes back as a `Result` with category `config` instead of escaping; a failing `firstUseHint()` is only logged.
 - **`Tool\ToolArgsGuard`** — detects leaked tool-call markup in arguments (`<parameter name=…>`, `<invoke …>`, tags named after parameters). Enabled by default (`Agent\Dto\Config::$toolArgsGuard`), disabled by assigning `null`, extendable with your own patterns. A tool with corrupted arguments is not executed — the model gets an error and re-sends the call.
 - **`Agent\Enum\Finish`** — why the run stopped (`completed`, `tool_limit`, `turns_exhausted`, `deadline`, `error`, `suspended`) in `Agent\Dto\Result::$finish`. Previously outcomes differed only by placeholder text.
 - **`Agent\Dto\Config::$deadlineSeconds`** — a wall-clock limit for the run; on expiry it returns a `deadline` error with the full history intact.
+- **The catalog's `defaultDeadlineSeconds`** — the default deadline for a run, used by the loop when the run does not set its own. A deadline describes the installation (web worker versus console command) rather than the task, so there is no need to repeat it in every calling service.
+- **The texts sent to the model are configurable:** `toolLimitReachedText`, `toolFailedText`, `toolFailedPrefix`, `encodeFailedText` and `firstUseResultKey` in `Agent\Dto\Config` — these strings used to be hard-coded in `Runner`.
 - **`Event::ATTEMPT_FAILED` and `Event::MODEL_FALLBACK`** — a failed attempt (with "will retry" and the delay) and a model switch. The UI can show retries as they happen instead of reconstructing them afterwards.
 - **`Http\ChatClientInterface` accepts headers and a per-call timeout**, and a custom client is injected through the provider config (`httpClient` — an object or a factory) instead of subclassing the provider.
 - **`Agent\Dto\Config::$maxSwitches`** — the switch limit for a single run (previously only the catalog set it).
@@ -38,6 +41,8 @@ The unit of choice is now the model, not the provider. Model catalog, one flat f
 - **Debugging over PSR-3:** `'debug' => true` in the provider config logs the outgoing payload and the raw response at `debug` level (this used to be a constant inside `CurlChatClient`).
 
 ### Changed
+
+- **A call now has a default time cap:** the catalog `maxTotalWaitSeconds` is 600 seconds instead of "unlimited"; an explicit `null` removes it. Without a cap the default 120 s timeout, 2 retries and 2 switches stretched a single call to almost twenty minutes.
 
 - **One retry level instead of two.** The transport no longer runs its own loop: retries are governed by the model policy (`retries`, `delay`, `backoff`, `maxDelay`, `perCategory`, `retryOn`, `stopOn`, `maxWaitSeconds`). Waiting time on failure is now predictable; the request timeout is the smaller of the configured one and what is left of the call budget.
 - **The error policy is set at three levels and never mixed between them.** A `policy` section exists on a model and on a provider, and the catalog defines `defaultPolicy`. The closest one applies — the model's, then its provider's, then the catalog's — and it applies in full: unset fields take `ErrorPolicy` defaults rather than values from a neighbouring level. So the config shows what governs a given call without working out what overrides what.
@@ -70,7 +75,7 @@ Tool notes moved out of the system prompt into the tool result — to preserve t
   - New `ToolInterface::firstUseHintKey(): string` — the key the note is stored under in the result. Defaults to `AbstractTool::DEFAULT_FIRST_USE_HINT_KEY` (`'hint_use'`), overridable per tool.
   - `AbstractTool` now defaults `firstUseHint() => ''` and `firstUseHintKey() => 'hint_use'`: a tool with no note implements nothing (`appendToSystemPromptAfterUse()` used to be mandatory).
   - `ToolboxInterface::systemPromptAddition($name)` → `ToolboxInterface::firstUseHint($name)`; added `firstUseHintKey($name)`.
-  - The note is injected only when non-empty; with several same-named calls in one turn only the first gets it; it is not duplicated on resume/retry (first-use is decided by the earliest occurrence of the tool name in history).
+  - The note is injected only when non-empty; a list result is tucked under `Config::$firstUseResultKey` (`result` by default), since a list cannot take a key; with several same-named calls in one turn only the first gets it; it is not duplicated on resume/retry (first-use is decided by the earliest occurrence of the tool name in history).
 
 ### Removed
 

@@ -40,6 +40,9 @@ use Throwable;
  */
 class Runner
 {
+    /** Меньший остаток срока прогона не даёт начать оборот: таймаут запроса не бывает короче секунды. */
+    private const MIN_TURN_SECONDS = 1.0;
+
     private Orchestra $orchestra;
 
     private LoggerInterface $logger;
@@ -86,11 +89,12 @@ class Runner
         $answeredModel = $config->model;
         $lastResponse = null;
 
-        // Память наблюдателя о том, какая модель отвечала: обнуляется перед каждым
-        // обращением к модели, чтобы возврат к запрошенной модели на следующем обороте
-        // (stickyFallback = false) не выглядел как ещё одно переключение.
-        $seenModel = null;
-        $orchestra = $this->prepareOrchestra($config, $emit, $seenModel);
+        // Срок прогона: свой у задачи либо каталожный — он описывает установку (веб-воркер против
+        // консольной команды), поэтому повторять его в каждом вызывающем сервисе не нужно.
+        $deadline = $config->deadlineSeconds ?? $this->orchestra->registry()->defaultDeadlineSeconds();
+
+        $observer = new AttemptObserver($emit);
+        $orchestra = $this->prepareOrchestra($config, $observer);
 
         // Возобновление прерванного хода: в истории мог остаться ассистентский ход с вызовами без
         // ответов — инструмент ждал внешнего ввода либо прогон оборвался посреди исполнения.
@@ -116,8 +120,10 @@ class Runner
             // Бюджет вызовов мог кончиться уже на доборе: тогда идём сразу к добивке, а не тратим
             // ещё один запрос к модели на ход, все вызовы которого всё равно будут отклонены.
             if ($outcome['limitExhausted']) {
+                $observer->reset();
+
                 return $this->finishOnToolLimit(
-                    $this->withinDeadline($orchestra, $config, $startedAt),
+                    $this->withinDeadline($orchestra, $deadline, $startedAt),
                     $messages,
                     $systemPromptFn,
                     $config,
@@ -134,10 +140,10 @@ class Runner
             $turnsUsed = $turn + 1;
             $toolCallsUsed = $config->maxToolCalls - $toolCallsLeft;
 
-            if ($this->deadlineExceeded($config, $startedAt)) {
+            if ($this->deadlineExceeded($deadline, $startedAt)) {
                 return $this->finalize(
                     Result::error(
-                        $this->deadlineError($config),
+                        $this->deadlineError($deadline),
                         $messages,
                         $turn,
                         $toolCallsUsed,
@@ -170,9 +176,9 @@ class Runner
                 );
             }
 
-            $seenModel = null;
+            $observer->reset();
             $request = $this->buildRequest($systemPrompt, $messages, $tools, $config);
-            $response = $this->withinDeadline($orchestra, $config, $startedAt)->execute($request, $currentModel);
+            $response = $this->withinDeadline($orchestra, $deadline, $startedAt)->execute($request, $currentModel);
 
             $attempts = array_merge($attempts, $response->attempts);
             // Потребление считаем только по состоявшимся вызовам: у неудачной попытки блока usage
@@ -182,6 +188,12 @@ class Runner
             }
 
             if (!$response->isSuccess()) {
+                // Упавшая модель — тоже факт прогона: после переключений это не та модель, которую
+                // запрашивали, и в результате должна стоять она, а не изначальный ключ.
+                if ($response->error !== null && $response->error->modelKey !== '') {
+                    $answeredModel = $response->error->modelKey;
+                }
+
                 return $this->finalize(
                     Result::error($response->error, $messages, $turnsUsed, $toolCallsUsed, $usage),
                     $answeredModel,
@@ -265,8 +277,10 @@ class Runner
             }
 
             if ($outcome['limitExhausted']) {
+                $observer->reset();
+
                 return $this->finishOnToolLimit(
-                    $this->withinDeadline($orchestra, $config, $startedAt),
+                    $this->withinDeadline($orchestra, $deadline, $startedAt),
                     $messages,
                     $systemPromptFn,
                     $config,
@@ -340,13 +354,13 @@ class Runner
      * переключениями законно уезжал бы далеко за дедлайн. Потолок каталога при этом не повышается —
      * берётся меньшее из двух.
      */
-    private function withinDeadline(Orchestra $orchestra, Config $config, float $startedAt): Orchestra
+    private function withinDeadline(Orchestra $orchestra, ?float $deadline, float $startedAt): Orchestra
     {
-        if ($config->deadlineSeconds === null) {
+        if ($deadline === null) {
             return $orchestra;
         }
 
-        $left = $config->deadlineSeconds - (microtime(true) - $startedAt);
+        $left = $deadline - (microtime(true) - $startedAt);
         $left = max(0.0, $left);
 
         $catalog = $orchestra->registry()->maxTotalWaitSeconds();
@@ -380,7 +394,7 @@ class Runner
      * Копия исполнителя на этот прогон: переопределения из конфига плюс трансляция попыток
      * и переключений моделей в события цикла.
      */
-    private function prepareOrchestra(Config $config, callable $emit, ?string &$seenModel): Orchestra
+    private function prepareOrchestra(Config $config, AttemptObserver $observer): Orchestra
     {
         $orchestra = $this->orchestra;
 
@@ -394,36 +408,7 @@ class Runner
             );
         }
 
-        $seenModel = null;
-
-
-        return $orchestra->withObserver(static function (AttemptLog $attempt) use ($emit, &$seenModel): void {
-            // Модель запоминаем до отправки события: иначе сбой приёмника заставил бы прислать
-            // одно и то же переключение ещё раз на следующей попытке.
-            $previousModel = $seenModel;
-            $seenModel = $attempt->modelKey;
-
-            if ($previousModel !== null && $attempt->modelKey !== $previousModel) {
-                $emit(Event::MODEL_FALLBACK, $attempt->modelKey, [
-                    'from' => $previousModel,
-                    'to'   => $attempt->modelKey,
-                ]);
-            }
-
-            if ($attempt->success || $attempt->error === null) {
-                return;
-            }
-
-            $emit(Event::ATTEMPT_FAILED, $attempt->error->category, [
-                'model'      => $attempt->modelKey,
-                'provider'   => $attempt->providerKey,
-                'attempt'    => $attempt->attempt,
-                'category'   => $attempt->error->category,
-                'message'    => $attempt->error->message,
-                'will_retry' => $attempt->willRetry,
-                'delay'      => $attempt->nextDelay,
-            ]);
-        });
+        return $orchestra->withObserver($observer);
     }
 
     /**
@@ -509,12 +494,14 @@ class Runner
             );
         }
 
-        if (trim((string)$response->content) !== '') {
-            $messages[] = Message::assistant((string)$response->content);
+        $content = trim((string)$response->content);
+
+        if ($content !== '') {
+            $messages[] = Message::assistant($content);
 
             return $this->finalize(
                 Result::success(
-                    (string)$response->content,
+                    $content,
                     $messages,
                     $turnsUsed,
                     $toolCallsUsed,
@@ -578,12 +565,7 @@ class Runner
             if ($limitExhausted) {
                 // Бюджет исчерпан: оставшиеся вызовы закрываем ошибкой, иначе завершённый ход
                 // повис бы без ответов и сломал следующий запрос и логику возобновления.
-                $this->answerWithError(
-                    $toolCall,
-                    'Достигнут лимит вызовов инструментов за прогон.',
-                    $messages,
-                    $emit
-                );
+                $this->answerWithError($toolCall, $config, $config->toolLimitReachedText, $messages, $emit);
                 continue;
             }
 
@@ -595,7 +577,7 @@ class Runner
             if ($config->toolArgsGuard !== null) {
                 $leak = $config->toolArgsGuard->findLeak($args, $paramNames[$toolName] ?? []);
                 if ($leak !== null) {
-                    $this->answerWithError($toolCall, $leak, $messages, $emit, true);
+                    $this->answerWithError($toolCall, $config, $leak, $messages, $emit, true);
                     continue;
                 }
             }
@@ -618,6 +600,7 @@ class Runner
                 ]);
                 $this->answerWithError(
                     $toolCall,
+                    $config,
                     $this->toolExceptionText($e, $config),
                     $messages,
                     $emit,
@@ -638,16 +621,9 @@ class Runner
             // Первый вызов инструмента в истории — кладём в его результат пояснение о том, как
             // читать поля ответа. Дописывается в хвост истории один раз за диалог, поэтому
             // системный префикс запроса остаётся стабильным.
-            // Пояснение дописывается ключом, поэтому результат-список от него превратился бы в
-            // объект — и форма ответа одного инструмента менялась бы от вызова к вызову.
-            $isList = $resultArray === [] || array_keys($resultArray) === range(0, count($resultArray) - 1);
-
-            if (!$isList && $this->isFirstUse($toolName, $toolCall->id, $messages)) {
+            if ($this->isFirstUse($toolName, $toolCall->id, $messages)) {
                 try {
-                    $hint = trim($toolbox->firstUseHint($toolName));
-                    if ($hint !== '') {
-                        $resultArray[$toolbox->firstUseHintKey($toolName)] = $hint;
-                    }
+                    $resultArray = $this->withFirstUseHint($resultArray, $toolName, $toolbox, $config);
                 } catch (Throwable $e) {
                     // Пояснение необязательно, а инструмент уже отработал: уронить прогон здесь
                     // значит потерять его результат и получить повторное исполнение при следующем
@@ -659,7 +635,7 @@ class Runner
                 }
             }
 
-            $content = self::encodeForModel($resultArray);
+            $content = self::encodeForModel($resultArray, $config->encodeFailedText);
 
             $emit(Event::TOOL_RESULT, $content, [
                 'tool_call_id' => $toolCall->id,
@@ -674,19 +650,46 @@ class Runner
     }
 
     /**
+     * Результат инструмента вместе с пояснением о том, как его читать.
+     *
+     * Пояснение добавляется ключом, поэтому результат-список сначала убирается под собственный
+     * ключ: иначе пояснение либо потерялось бы, либо превратило список в объект со случайными
+     * числовыми ключами.
+     */
+    private function withFirstUseHint(array $result, string $toolName, ToolboxInterface $toolbox, Config $config): array
+    {
+        $hint = trim($toolbox->firstUseHint($toolName));
+        if ($hint === '') {
+            return $result;
+        }
+
+        $hintKey = $toolbox->firstUseHintKey($toolName);
+        $isList = $result === [] || array_keys($result) === range(0, count($result) - 1);
+
+        if ($isList) {
+            return [$hintKey => $hint, $config->firstUseResultKey => $result];
+        }
+
+        $result[$hintKey] = $hint;
+
+        return $result;
+    }
+
+    /**
      * Закрыть вызов ошибкой: модель увидит её на следующем ходу и сможет отреагировать.
      *
      * @param Message[] $messages дополняется по ссылке
      */
     private function answerWithError(
         ToolCall $toolCall,
+        Config   $config,
         string   $message,
         array    &$messages,
         callable $emit,
         bool     $guard = false,
         bool     $exception = false
     ): void {
-        $content = self::encodeForModel(['error' => $message]);
+        $content = self::encodeForModel(['error' => $message], $config->encodeFailedText);
 
         $meta = [
             'tool_call_id' => $toolCall->id,
@@ -716,33 +719,30 @@ class Runner
     private function toolExceptionText(Throwable $e, Config $config): string
     {
         if (!$config->exposeToolExceptions) {
-            return 'Инструмент завершился внутренней ошибкой. Повторять вызов с теми же аргументами бессмысленно.';
+            return $config->toolFailedText;
         }
 
         $message = trim(preg_replace('/\s+/u', ' ', $e->getMessage()) ?? '');
         if ($message === '') {
-            return 'Инструмент завершился внутренней ошибкой.';
+            return $config->toolFailedText;
         }
 
         if (mb_strlen($message) > Config::TOOL_EXCEPTION_MAX_LENGTH) {
             $message = mb_substr($message, 0, Config::TOOL_EXCEPTION_MAX_LENGTH) . '…';
         }
 
-        return 'Инструмент завершился ошибкой: ' . $message;
+        return $config->toolFailedPrefix . $message;
     }
 
     /**
      * JSON для tool-сообщения. Битые последовательности заменяются, а не роняют кодирование:
      * пустое tool-сообщение выглядело бы для модели как «инструмент ничего не ответил».
      */
-    private static function encodeForModel(array $payload): string
+    private static function encodeForModel(array $payload, string $failedText): string
     {
         $content = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
         if ($content === false) {
-            $content = json_encode(
-                ['error' => 'Результат инструмента не удалось сериализовать в JSON.'],
-                JSON_UNESCAPED_UNICODE
-            );
+            $content = json_encode(['error' => $failedText], JSON_UNESCAPED_UNICODE);
         }
 
         return (string)$content;
@@ -801,57 +801,71 @@ class Runner
      * Вызовы инструментов, оставшиеся без ответного tool-сообщения. Возникают при возобновлении:
      * инструмент ждёт внешнего ввода либо прогон оборвался посреди исполнения.
      *
-     * Разница множеств безопасна, потому что держится инвариант «завершённый ход всегда полностью
-     * отвечён»: обычные ходы закрываются перед следующим ассистентом, а ход, обрезанный лимитом
-     * вызовов, закрывается ошибками в executeToolCalls. Значит без ответа может остаться только
-     * текущий незавершённый ход.
+     * Смотрим только последний ассистентский ход с вызовами, потому что держится инвариант
+     * «завершённый ход всегда полностью отвечён»: обычные ходы закрываются перед следующим
+     * ассистентом, а ход, обрезанный лимитом вызовов, закрывается ошибками в executeToolCalls.
+     * Заодно это защищает от провайдеров, которые нумеруют вызовы одинаково в разных ходах: искать
+     * по всей истории значило бы считать вызов отвеченным ответом на его тёзку из прошлого хода.
      *
      * @param Message[] $messages
      * @return ToolCall[]
      */
     private function findUnansweredToolCalls(array $messages): array
     {
+        $messages = array_values($messages);
+
+        $lastCallTurn = null;
+        foreach ($messages as $index => $message) {
+            if ($message->role === Role::ASSISTANT && !empty($message->toolCalls)) {
+                $lastCallTurn = $index;
+            }
+        }
+
+        if ($lastCallTurn === null) {
+            return [];
+        }
+
         $answeredIds = [];
-        foreach ($messages as $message) {
+        foreach (array_slice($messages, $lastCallTurn + 1) as $message) {
             if ($message->role === Role::TOOL && $message->toolCallId !== null) {
                 $answeredIds[$message->toolCallId] = true;
             }
         }
 
         $unanswered = [];
-        foreach ($messages as $message) {
-            if ($message->role !== Role::ASSISTANT || empty($message->toolCalls)) {
+        foreach ($messages[$lastCallTurn]->toolCalls as $raw) {
+            if (!is_array($raw)) {
                 continue;
             }
-            foreach ($message->toolCalls as $raw) {
-                if (!is_array($raw)) {
-                    continue;
-                }
-                $id = $raw['id'] ?? null;
-                if ($id === null || isset($answeredIds[$id])) {
-                    continue;
-                }
-                $unanswered[] = ToolCallFactory::fromArray($raw);
+            $id = $raw['id'] ?? null;
+            if ($id === null || isset($answeredIds[$id])) {
+                continue;
             }
+            $unanswered[] = ToolCallFactory::fromArray($raw);
         }
 
         return $unanswered;
     }
 
-    private function deadlineExceeded(Config $config, float $startedAt): bool
+    /**
+     * Исчерпан ли срок прогона. Оборот, которому осталось меньше секунды, не начинается: таймаут
+     * запроса всё равно округляется вверх до секунды, то есть такой оборот гарантированно упёрся бы
+     * в таймаут и вернул бы сбой модели вместо честного «истёк срок».
+     */
+    private function deadlineExceeded(?float $deadline, float $startedAt): bool
     {
-        if ($config->deadlineSeconds === null) {
+        if ($deadline === null) {
             return false;
         }
 
-        return (microtime(true) - $startedAt) >= $config->deadlineSeconds;
+        return ($deadline - (microtime(true) - $startedAt)) < self::MIN_TURN_SECONDS;
     }
 
-    private function deadlineError(Config $config): ErrorInfo
+    private function deadlineError(?float $deadline): ErrorInfo
     {
         return new ErrorInfo(
             ErrorCategory::DEADLINE,
-            'Истёк отведённый на прогон срок (' . $config->deadlineSeconds . ' с).',
+            'Истёк отведённый на прогон срок (' . $deadline . ' с).',
             false
         );
     }

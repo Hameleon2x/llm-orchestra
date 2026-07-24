@@ -95,7 +95,7 @@ The category determines both whether we retry the request with the same model an
 
 The logic is simple: retry whatever might succeed on a second attempt; switch models when the problem is with a specific model or key; stop when the request itself is wrong.
 
-The HTTP status does not fix the category rigidly: for 4xx responses the error text refines it — an overflowing context and a moderation block both arrive as HTTP 400. Responses 5xx and 429 are never overridden by text.
+The HTTP status does not fix the category rigidly: for 4xx responses the error text refines it — an overflowing context and a moderation block both arrive as HTTP 400. Responses 5xx and 429 are never overridden by text. The word "timeout" never overrides a response that carries an error status: the status says more about the request than the wording does. A redirect (3xx) in reply to a POST is always `config` — that is what a wrong provider URL looks like.
 
 The default behavior is overridden by the policy — `retryOn`, `stopOn`, `then` — see [02-catalog-and-fallback.md](02-catalog-and-fallback.md).
 
@@ -159,7 +159,7 @@ There are two of them, and both rarely reach application code.
 
 `LlmException` carries an `ErrorInfo` and lives inside providers: `Orchestra` catches it, records the attempt, and decides what to do next.
 
-`LlmConfigException` is raised while building the catalog and when referring to an unknown model — that is, while the mistake can still be fixed in the config. It's worth catching at application startup to show a clear message.
+`LlmConfigException` is raised while building the catalog and when an unknown model is requested from the `Registry` directly — that is, while the mistake can still be fixed in the config. Through `Orchestra` an unknown key never becomes an exception: it is replaced by the catalog default with a warning in the log, and if there is no default either, a `config` error is returned. It's worth catching at application startup to show a clear message.
 
 If you're writing your own provider, the easiest way to get a category is through `ErrorMapper`:
 

@@ -42,6 +42,24 @@ final class GenerationParams
     }
 
     /**
+     * Имена, которые можно перечислять в `unsupported`: имена полей плюс их написание в payload.
+     *
+     * @return string[]
+     */
+    public static function knownNames(): array
+    {
+        return array_merge(array_keys(self::PAYLOAD_KEYS), array_keys(self::ALIASES));
+    }
+
+    /**
+     * Есть ли такой параметр генерации (в любом из допустимых написаний).
+     */
+    public static function isKnownName(string $name): bool
+    {
+        return isset(self::PAYLOAD_KEYS[self::ALIASES[$name] ?? $name]);
+    }
+
+    /**
      * Копия, в которой заданные поля $override перекрывают текущие.
      */
     public function merge(?self $override): self

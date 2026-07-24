@@ -100,7 +100,17 @@ final class ModelDefinition
         $definition->fullName = (string)($config['fullName'] ?? $key);
         $definition->description = (string)($config['description'] ?? '');
         $definition->params = GenerationParams::fromArray((array)($config['params'] ?? []));
-        $definition->unsupported = (array)($config['unsupported'] ?? []);
+        // Опечатка в unsupported ничего не вырезала бы, а провайдер ответил бы на такой запрос
+        // ошибкой bad_request — её не повторяют и не пробуют другой моделью.
+        foreach ((array)($config['unsupported'] ?? []) as $name) {
+            if (!GenerationParams::isKnownName((string)$name)) {
+                throw new LlmConfigException(
+                    "Модель «{$key}»: неизвестный параметр в unsupported — «{$name}». Допустимы: "
+                    . implode(', ', GenerationParams::knownNames()) . '.'
+                );
+            }
+            $definition->unsupported[] = (string)$name;
+        }
         $definition->extraParams = (array)($config['extraParams'] ?? []);
         $definition->headers = (array)($config['headers'] ?? []);
         $definition->capture = (array)($config['capture'] ?? []);

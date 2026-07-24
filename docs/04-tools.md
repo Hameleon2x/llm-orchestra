@@ -122,7 +122,7 @@ The tool receives its dependencies through the constructor — the toolbox suppl
 - **`getDescription(): string`** — when and why to call it. Goes into every request together with the list of tools, so keep it short and with an explicit trigger: "call when asked about the weather".
 - **`getParameters(): array`** — a list of `Property`, one per argument. A JSON Schema is built from them, and the model shapes its call against it.
 - **`execute(array $args): Result`** — the actual work. `$args` is the already-decoded JSON from the model.
-- **`firstUseHint(): string`** — an explanation of how to read the tool's **response**. Mixed into its result on the first call in the dialogue. Empty by default.
+- **`firstUseHint(): string`** — an explanation of how to read the tool's **response**. Mixed into its result on the first call in the dialogue. Empty by default. An object result gets the note as a neighbouring key, while a list result is tucked under `Config::$firstUseResultKey` (`result` by default) next to the note: a list cannot take a key, and losing the note would be worse.
 - **`firstUseHintKey(): string`** — the key the explanation is placed under in the result. `hint_use` by default; change it if that key is already used by your data.
 - **`shouldDisplay(array $args): bool`** — a hint for the UI: whether to show this call to the user. Doesn't affect execution.
 

@@ -185,6 +185,11 @@ final class ErrorMapper
         if ($status >= 400) {
             return ErrorCategory::BAD_REQUEST;
         }
+        if ($status >= 300) {
+            // Редирект в ответ на POST: адрес провайдера указан не тем, чем надо (схема, лишний путь,
+            // переехавший шлюз). Транспорт редиректы не проходит намеренно — повторять нечего.
+            return ErrorCategory::CONFIG;
+        }
 
         return ErrorCategory::UNKNOWN;
     }
@@ -198,6 +203,11 @@ final class ErrorMapper
     private static function textOverridesStatus(int $status, string $byText): bool
     {
         if ($status >= 500 || $status === 429) {
+            return false;
+        }
+        // Тело редиректа — обычно HTML страницы-заглушки, случайное слово в нём не должно
+        // перебивать вывод «адрес указан неверно».
+        if ($status >= 300 && $status < 400) {
             return false;
         }
 

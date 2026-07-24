@@ -4,6 +4,7 @@ namespace Hameleon2x\Llm\Config;
 
 use Hameleon2x\Llm\Error\ErrorCategory;
 use Hameleon2x\Llm\Error\ErrorInfo;
+use Hameleon2x\Llm\Exception\LlmConfigException;
 
 /**
  * Что делать со сбоем: сколько раз повторить ту же модель и передавать ли работу следующей
@@ -97,16 +98,16 @@ final class ErrorPolicy
             $policy->maxDelay = max(0.0, (float)$config['maxDelay']);
         }
         if (isset($config['then'])) {
-            $policy->then = (string)$config['then'] === self::THEN_STOP ? self::THEN_STOP : self::THEN_FALLBACK;
+            $policy->then = self::validThen((string)$config['then']);
         }
         if (isset($config['perCategory']) && is_array($config['perCategory'])) {
             $policy->perCategory = self::normalizePerCategory($config['perCategory']);
         }
         if (isset($config['retryOn']) && is_array($config['retryOn'])) {
-            $policy->retryOn = $config['retryOn'];
+            $policy->retryOn = self::validCategories($config['retryOn'], 'retryOn');
         }
         if (isset($config['stopOn']) && is_array($config['stopOn'])) {
-            $policy->stopOn = $config['stopOn'];
+            $policy->stopOn = self::validCategories($config['stopOn'], 'stopOn');
         }
         if (array_key_exists('maxWaitSeconds', $config)) {
             $policy->maxWaitSeconds = $config['maxWaitSeconds'] !== null
@@ -164,6 +165,46 @@ final class ErrorPolicy
     }
 
     /**
+     * Значение `then`. Опечатка не должна молча означать «перебирать модели дальше»: этим полем
+     * как раз запрещают подменять дорогую модель, и ошибка в написании стоила бы неожиданного счёта.
+     */
+    private static function validThen(string $then): string
+    {
+        if ($then !== self::THEN_FALLBACK && $then !== self::THEN_STOP) {
+            throw new LlmConfigException(
+                "Неизвестное значение then: «{$then}». Допустимы: " . self::THEN_FALLBACK . ', ' . self::THEN_STOP . '.'
+            );
+        }
+
+        return $then;
+    }
+
+    /**
+     * Список категорий из конфига. Опечатка здесь опаснее пропуска: непустой `retryOn`, в который
+     * не попала ни одна настоящая категория, выключает повторы совсем.
+     *
+     * @param array $categories
+     * @return string[]
+     */
+    private static function validCategories(array $categories, string $field): array
+    {
+        $clean = [];
+
+        foreach ($categories as $category) {
+            $category = (string)$category;
+            if (!ErrorCategory::isKnown($category)) {
+                throw new LlmConfigException(
+                    "Неизвестная категория ошибки в {$field}: «{$category}». Допустимы: "
+                    . implode(', ', ErrorCategory::all()) . '.'
+                );
+            }
+            $clean[] = $category;
+        }
+
+        return $clean;
+    }
+
+    /**
      * Привести переопределения по категориям к тем же типам и границам, что и поля политики.
      * Иначе опечатка в конфиге (`'retries' => 'много'`) сравнивалась бы со счётчиком попыток как
      * строка и повторы стали бы бесконечными.
@@ -178,6 +219,14 @@ final class ErrorPolicy
         foreach ($perCategory as $category => $overrides) {
             if (!is_array($overrides)) {
                 continue;
+            }
+
+            $category = (string)$category;
+            if (!ErrorCategory::isKnown($category)) {
+                throw new LlmConfigException(
+                    "Неизвестная категория ошибки в perCategory: «{$category}». Допустимы: "
+                    . implode(', ', ErrorCategory::all()) . '.'
+                );
             }
 
             $clean = [];
@@ -195,7 +244,7 @@ final class ErrorPolicy
             }
 
             if ($clean !== []) {
-                $normalized[(string)$category] = $clean;
+                $normalized[$category] = $clean;
             }
         }
 

@@ -44,10 +44,24 @@ final class Registry
 
     /**
      * Потолок времени на весь вызов, секунды: все модели, все их повторы и паузы. Ограничитель
-     * прогона, а не модели, поэтому живёт рядом с цепочкой и maxSwitches, а не в политике ошибок.
-     * null — без потолка.
+     * вызова, а не модели, поэтому живёт рядом с цепочкой и maxSwitches, а не в политике ошибок.
+     * Явный `null` в конфиге снимает потолок.
+     *
+     * Значение по умолчанию конечное намеренно: с таймаутом 120 с, двумя повторами и двумя
+     * переключениями вызов без потолка растянулся бы на девятнадцать минут, а зовут библиотеку
+     * обычно из веб-запроса. Модели, которые сами отвечают дольше (рассуждающие), требуют поднять
+     * это значение вместе со своим timeout.
      */
-    private ?float $maxTotalWaitSeconds = null;
+    private ?float $maxTotalWaitSeconds = 600.0;
+
+    /**
+     * Срок агентского прогона по умолчанию, секунды: сколько времени отводится циклу целиком, со
+     * всеми его оборотами. Берётся, когда прогон не задал свой `Config::$deadlineSeconds`.
+     *
+     * Живёт в каталоге, потому что зависит от установки, а не от задачи: в веб-воркере уместны
+     * минуты, в консольной команде — часы. null — без срока.
+     */
+    private ?float $defaultDeadlineSeconds = null;
 
     private ?string $defaultModel = null;
 
@@ -61,7 +75,7 @@ final class Registry
      * Собрать каталог из конфигурации приложения.
      *
      * Ключи: providers, models, defaultModel, defaultParams, defaultPolicy, fallback, maxSwitches,
-     * maxTotalWaitSeconds.
+     * maxTotalWaitSeconds, defaultDeadlineSeconds.
      */
     public static function fromArray(array $config): self
     {
@@ -89,6 +103,11 @@ final class Registry
         if (array_key_exists('maxTotalWaitSeconds', $config)) {
             $registry->maxTotalWaitSeconds = $config['maxTotalWaitSeconds'] !== null
                 ? (float)$config['maxTotalWaitSeconds']
+                : null;
+        }
+        if (array_key_exists('defaultDeadlineSeconds', $config)) {
+            $registry->defaultDeadlineSeconds = $config['defaultDeadlineSeconds'] !== null
+                ? (float)$config['defaultDeadlineSeconds']
                 : null;
         }
         if (isset($config['defaultModel']) && $config['defaultModel'] !== '') {
@@ -337,6 +356,14 @@ final class Registry
     public function maxTotalWaitSeconds(): ?float
     {
         return $this->maxTotalWaitSeconds;
+    }
+
+    /**
+     * Срок агентского прогона по умолчанию, секунды. null — без срока.
+     */
+    public function defaultDeadlineSeconds(): ?float
+    {
+        return $this->defaultDeadlineSeconds;
     }
 
     /**

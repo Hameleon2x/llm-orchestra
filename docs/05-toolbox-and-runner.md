@@ -184,7 +184,7 @@ The third limiter is the deadline: `$config->deadlineSeconds`. It is checked bef
 
 A tool can have a non-obvious response format — for example, fields `docId` and `sources[]` that the model must use in a specific way. Such an explanation shouldn't live in the system prompt: it's sent to the model on every request and costs tokens even when the tool isn't used.
 
-Instead, the loop mixes the explanation into the tool's result on its **first** call in the dialog: `$toolbox->firstUseHint($name)` is placed into the JSON response under the key `$toolbox->firstUseHintKey($name)` (default `hint_use`). Once per dialog, at the tail of the history — the start of the request stays unchanged, and the provider's prompt cache keeps working.
+Instead, the loop mixes the explanation into the tool's result on its **first** call in the dialog: `$toolbox->firstUseHint($name)` is placed into the JSON response under the key `$toolbox->firstUseHintKey($name)` (default `hint_use`). Once per dialog, at the tail of the history — the start of the request stays unchanged, and the provider's prompt cache keeps working. The note goes in under its own key. A tool that answers with a list has nowhere to put that key, so on the first call its list is tucked under `Config::$firstUseResultKey` (`result` by default) with the note next to it: `{"hint_use": "…", "result": [...]}`. Later calls return a plain list again.
 
 ## See also
 

@@ -88,6 +88,40 @@ final class ErrorCategory
     ];
 
     /**
+     * Все категории — чтобы проверять значения из конфига и перечислять допустимые в сообщении
+     * об ошибке.
+     *
+     * @return string[]
+     */
+    public static function all(): array
+    {
+        return [
+            self::NETWORK,
+            self::TIMEOUT,
+            self::EMPTY_RESPONSE,
+            self::RATE_LIMIT,
+            self::SERVER_ERROR,
+            self::INVALID_RESPONSE,
+            self::MODEL_UNAVAILABLE,
+            self::CONTEXT_LENGTH,
+            self::CONTENT_FILTER,
+            self::AUTH,
+            self::BAD_REQUEST,
+            self::DEADLINE,
+            self::CONFIG,
+            self::UNKNOWN,
+        ];
+    }
+
+    /**
+     * Есть ли такая категория.
+     */
+    public static function isKnown(string $category): bool
+    {
+        return in_array($category, self::all(), true);
+    }
+
+    /**
      * Повторять ли эту категорию той же моделью (поведение по умолчанию).
      */
     public static function isRetryableByDefault(string $category): bool

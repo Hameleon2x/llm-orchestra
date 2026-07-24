@@ -98,14 +98,48 @@ if (!$result->success && $result->error !== null) {   // a suspended run has no 
 - Remove hand-written "retry the whole run on a dropped connection" loops: retries and model switches are `Orchestra`'s job, and they reach the UI as `Event::ATTEMPT_FAILED` and `Event::MODEL_FALLBACK`.
 - Tool-argument checking is on by default (`Config::$toolArgsGuard`); remove your own copy of it.
 
-### 5. Smaller things
+### 5. Custom providers
+
+A provider now only owns the API format: build the payload, send it, parse the response. Config merging, retries and model switching moved into `Orchestra`.
+
+```php
+// before
+class MyProvider extends BaseProvider
+{
+    // constructor: (token, model, baseUrl, temperature, topP, maxTokens, retryAttempts, timeout, priority, supportedModels, logger)
+    protected function doExecute(Request $request): Response { ... }
+}
+
+// after — constructor is (ProviderDefinition $definition, ?LoggerInterface $logger = null)
+class MyProvider extends BaseProvider
+{
+    protected function defaultBaseUrl(): string { return 'https://api.example.com'; }
+    protected function endpointPath(): string   { return '/v1/chat/completions'; }
+
+    public function execute(ResolvedCall $call): Response { ... }
+}
+```
+
+- `ProviderInterface::execute()` takes a `ResolvedCall` instead of a `Request`: provider, model and per-call settings are already merged, and the model slug, headers and timeout come with the call.
+- `getName()` and `getPriority()` are gone: a provider is named by its catalog key, and the order comes from `fallback`.
+- `BaseProvider`'s public properties (`$token`, `$model`, `$baseUrl`, `$temperature`, `$topP`, `$maxTokens`, `$retryAttempts`, `$timeout`, `$priority`, `$supportedModels`) and its `doExecute()`, `getModel()`, `isModelSupported()`, `getStatusFromException()`, `sleep()` methods are gone — that data now arrives in the `ResolvedCall`, or is no longer needed.
+- A provider reports failure by throwing `LlmException` with an `ErrorInfo`, not by returning `Response::error()`.
+- You do not need a class just for a different URL or a few extra payload fields — `baseUrl`, `headers` and `extraParams` in the catalog cover that. Full example: [docs/12-custom-provider.md](docs/12-custom-provider.md).
+
+### 6. Smaller things
 
 - `Agent\Dto\Usage` → `Dto\Usage`.
-- `Response::$model` (the slug) is now `$modelName`; `$modelKey` holds the catalog key.
+- A call now has a default time cap: the catalog `maxTotalWaitSeconds` is 600 seconds. If you have models that take more than ten minutes to answer, raise it or remove it with an explicit `null`.
+- `Response::$model` (the slug) is now `$modelName`; `$modelKey` holds the catalog key, and `$provider` became `$providerKey`.
+- `Response::getTotalTokens()`, `getPromptTokens()`, `getCompletionTokens()` are gone — the counters live in `$response->usage`; `getLatency()` → `latency()`; `$status` is gone (the reason for a failure is the category in `$error`).
+- `Response::success()` and `Response::error()` are gone: the provider assembles the response, and a failure is `Response::failed(ErrorInfo)`.
+- `LlmException::isRetryable()` and `$retryable` are gone: use `$e->info()->retryable`, and `$e->category()` for the category.
+- `Request::$temperature`, `$topP`, `$maxTokens` and `$seed` are collected into `$params` (`GenerationParams`); the setters stayed. `setPlugins()` → `setExtraParams()`.
+- `Config::$maxTurns` now defaults to 40 instead of 10: the turn limit must fire later than the tool-call limit, otherwise a run ends with a placeholder instead of the model's answer.
+- `Agent\Dto\Result` is only built through its factories (`Result::success()`, `error()`, `suspended()`) — the constructor is closed.
 - A custom HTTP client is injected via the provider config (`'httpClient' => $client`), and its method takes headers and a timeout: `chat(array $payload, array $headers = [], ?int $timeout = null)`.
 - The `CurlChatClient::DEBUG` constant is replaced by `'debug' => true` in the provider config (logs through PSR-3).
 - `CurlChatClient`'s constructor takes a ready endpoint URL as its first argument: `(string $url, string $token, int $timeout = 120, bool $debug = false, ?LoggerInterface $logger = null)`. Previously the token came first and the transport appended `/v1/chat/completions` itself. Rewrite direct `new CurlChatClient($token, $baseUrl)` calls — otherwise the request goes to a URL built from the token.
-- `ProviderInterface::key()` and `name()` are gone: a custom provider no longer implements them.
 - A custom HTTP client factory receives the ready endpoint URL as its second argument: `function(ProviderDefinition $definition, string $url)`. No more assembling the path from `baseUrl` by hand (and `baseUrl` could be `null`).
 
 ## 0.2.x → 0.3.x

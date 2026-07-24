@@ -396,15 +396,21 @@ final class Orchestra
     private function provider(ModelDefinition $model): ProviderInterface
     {
         $key = $model->provider;
+        $definition = $this->registry->provider($key);
+
+        // Сверяем и само определение: addProvider() мог заменить запись каталога (ротация токена,
+        // переезд шлюза), а кешированный транспорт помнит прежние значения.
         if ($this->providers->offsetExists($key)) {
-            return $this->providers->offsetGet($key);
+            [$cached, $provider] = $this->providers->offsetGet($key);
+            if ($cached === $definition) {
+                return $provider;
+            }
         }
 
-        $definition = $this->registry->provider($key);
         $class = $definition->class;
 
         $provider = new $class($definition, $this->logger);
-        $this->providers->offsetSet($key, $provider);
+        $this->providers->offsetSet($key, [$definition, $provider]);
 
         return $provider;
     }

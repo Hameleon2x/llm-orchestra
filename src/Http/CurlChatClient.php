@@ -85,7 +85,9 @@ final class CurlChatClient implements ChatClientInterface
             $this->logger->debug('LLM response', ['status' => $httpCode, 'body' => $responseBody]);
         }
 
-        if ($httpCode >= 400) {
+        // Редиректы (3xx) не проходим: POST при переходе превращается в GET, а ответом на него будет
+        // не JSON, и сбой выглядел бы как неразбираемый ответ вместо неверно указанного адреса.
+        if ($httpCode >= 300) {
             $payloadDecoded = json_decode($responseBody, true);
 
             throw new LlmException(ErrorMapper::fromHttpStatus(

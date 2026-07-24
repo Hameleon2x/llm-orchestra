@@ -10,7 +10,7 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 
 - **`model`** (`?string`, default `null`) — the catalog model key. `null` — the catalog's default model.
 - **`fallback`** (`?string[]`, `null`) — the backup model chain for this run. `null` — the catalog's chain.
-- **`maxSwitches`** (`?int`, `null`) — how many switches to a backup model are allowed per call. `null` — the catalog value.
+- **`maxSwitches`** (`?int`, `null`) — how many switches to a backup model are allowed per model call, that is within a single loop turn rather than the whole run. `null` — the catalog value.
 - **`policy`** (`?ErrorPolicy`, `null`) — the retry policy for this run. `null` — the model's or the catalog's policy.
 - **`stickyFallback`** (`bool`, `true`) — after a switch, continue the run on the model that answered.
 
@@ -18,7 +18,7 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 
 - **`maxTurns`** (`int`, `40`) — how many times the model can be called. One turn is one request.
 - **`maxToolCalls`** (`int`, `30`) — how many tools can be executed over the whole run, not per turn.
-- **`deadlineSeconds`** (`?float`, `null`) — the maximum run duration in seconds.
+- **`deadlineSeconds`** (`?float`, `null`) — the maximum run duration in seconds. `null` — the catalog's `defaultDeadlineSeconds` is used; if that is unset too, there is no deadline.
 
 **What goes into the request**
 
@@ -33,6 +33,11 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 - **`limitNudgeMessage`** (`string`) — the message added to the history when `maxToolCalls` runs out.
 - **`limitFallbackText`** (`string`) — the answer when the follow-up returns a turn with no text but with tool calls. An empty turn is an `empty_response` error, not a placeholder.
 - **`turnsExhaustedText`** (`string`) — the answer when `maxTurns` runs out.
+- **`toolLimitReachedText`** (`string`) — what the model gets instead of the result of a call rejected by an exhausted `maxToolCalls`.
+- **`toolFailedText`** (`string`) — what the model gets instead of the result of a tool that threw.
+- **`toolFailedPrefix`** (`string`) — the start of the answer when the exception message is shown to the model (`exposeToolExceptions`).
+- **`encodeFailedText`** (`string`) — what the model gets when a tool result cannot be encoded as JSON.
+- **`firstUseResultKey`** (`string`, `'result'`) — the key a list result is tucked under when the first-use hint is added to it.
 
 All fields are public — set them directly:
 
@@ -75,7 +80,7 @@ The result is marked `Finish::TOOL_LIMIT`, and the nudge's token spend is includ
 
 ## `deadlineSeconds`
 
-Checked before every turn. On expiry the run returns a `Result` with an error of category `deadline`, `finish = Finish::DEADLINE`, and the full history — accumulated tool results are not lost.
+Checked before every turn. On expiry the run returns a `Result` with an error of category `deadline`, `finish = Finish::DEADLINE`, and the full history — accumulated tool results are not lost. A turn also does not start when less than a second of the deadline is left: a request timeout is rounded up to a second anyway, so such a turn would report a model timeout instead of an honest "the deadline is over".
 
 The deadline also holds inside a turn: the remaining time is passed to the executor as the wait cap for that call, so retries and model switches cannot carry the run past it. The timeout of the next request cannot exceed what is left of the deadline either.
 

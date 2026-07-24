@@ -102,7 +102,7 @@ What you can set:
 - **`fullName`** — the display name for the UI. Defaults to the key.
 - **`description`** — what the model is good at; handy to show in a picker.
 - **`params`** — `temperature`, `topP`, `maxTokens`, `seed`.
-- **`unsupported`** — parameters the model doesn't accept. Always stripped from the request, no matter who set them.
+- **`unsupported`** — parameters the model doesn't accept. Always stripped from the request, no matter who set them. Names are spelled either as in `params` (`topP`, `maxTokens`) or as in the payload (`top_p`, `max_tokens`).
 - **`extraParams`** — payload fields specific to this model.
 - **`headers`** — headers specific to this model.
 - **`capture`** — a response field extraction map on top of the provider's map.
@@ -285,7 +285,9 @@ It is easy to end up with unpleasant arithmetic here: a 600-second timeout with 
 
 **`maxTotalWaitSeconds` is about the whole call**, so it is a catalog key next to `fallback` and `maxSwitches`: it does not depend on which model is running. It counts from the start of the call; when it runs out, both retries and switches stop and the last error is returned.
 
-None of the caps is set by default: with the default 120 s timeout, 2 retries and 2 switches a single call takes about twenty minutes in the worst case, and an agent run takes hours. If you call this from a web request, set the caps explicitly.
+**`defaultDeadlineSeconds` is about a whole agent run**: the `Runner` loop calls the model many times and every call gets its own `maxTotalWaitSeconds`, so the upper bound of the run itself is a separate key. It belongs to the catalog because it depends on the installation rather than the task: minutes make sense in a web worker, hours in a console command. A run may set its own deadline (`Config::$deadlineSeconds`), and then the catalog value is not used. Defaults to `null` — no deadline.
+
+`maxTotalWaitSeconds` defaults to 600 seconds: without a cap the default 120 s timeout, 2 retries and 2 switches stretch a single call to almost twenty minutes, and this library is usually called from a web request. An explicit `null` removes the cap; models that think for more than ten minutes on their own need both it and their `timeout` raised. The model cap (`maxWaitSeconds`) is not set by default.
 
 Both caps account for all the time spent, not just the pauses, but they work differently. The call cap also clamps the timeout of the next request: it can never exceed what is left of the budget, so a call does not outrun `maxTotalWaitSeconds`. The model cap is only checked before deciding on a retry, so a request already sent to the provider runs out its `timeout` — and the model's time may exceed `maxWaitSeconds` by the length of that request.
 
@@ -343,11 +345,11 @@ $response->extra('reasoning');   // whatever was found at the first non-empty pa
 
 A value is a path or a list of paths; the first non-empty one wins. A list is needed when different gateways name the same field differently: the application reads `extra('reasoning')` and notices nothing when switching between providers.
 
-The built-in map can be overridden with your own path but not switched off: `null` in `capture` removes the key from the configuration while the built-in path stays. For OpenAI-compatible providers, the built-in map already covers `reasoning`, `annotations`, `refusal`, `citations`, `systemFingerprint`, and the upstream name. Config extends and overrides it.
+The built-in map can be overridden with your own path but not switched off: `null` in `capture` removes the key from the configuration while the built-in path stays. For OpenAI-compatible providers, the built-in map already covers `reasoning`, `annotations`, `refusal`, `citations`, `systemFingerprint`, and the upstream name (the `upstream` key). Config extends and overrides it.
 
 ## Config validation
 
-The catalog is validated as a whole at build time: at least one provider and one model must be defined; the provider a model references must exist; so must the keys in the chain and the default model; the provider class must exist and implement `ProviderInterface`. Any violation raises `LlmConfigException` with a clear message, before the first request.
+The catalog is validated as a whole at build time: at least one provider and one model must be defined; the provider a model references must exist; so must the keys in the chain and the default model; the provider class must exist and implement `ProviderInterface`. Values with a closed set of options are checked too: `then`, the categories in `retryOn`, `stopOn` and the keys of `perCategory`, and the names in `unsupported`. A typo there would silently invert the behaviour — `'Stop'` instead of `'stop'` would read as "keep trying other models", and a non-empty `retryOn` without a single real category would disable retries entirely. Any violation raises `LlmConfigException` with a clear message, before the first request.
 
 ## What the catalog can return
 
