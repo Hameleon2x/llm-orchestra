@@ -45,4 +45,12 @@ interface ToolInterface
      * @param array $args декодированные аргументы от LLM
      */
     public function execute(array $args): Result;
+
+    /**
+     * Нужно ли рендерить вызов тулзы в UI чата (виджеты, превью результата).
+     *
+     * Движку признак не нужен — он для приложения, которое показывает ход диалога. В контракте
+     * тулзы он потому, что показывает её именно вызывающий код, а не реестр.
+     */
+    public function shouldDisplay(array $args): bool;
 }
