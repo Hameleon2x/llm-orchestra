@@ -12,7 +12,7 @@ use Hameleon2x\Llm\Exception\LlmException;
  * Провайдер намеренно ничего не решает: повторы, переключение моделей и слияние настроек делает
  * Orchestra, а сюда приходит готовый ResolvedCall. Поэтому свой провайдер — это один метод.
  *
- * Каталог создаёт провайдера как `new $class($definition, $logger)` — конструктор с такой
+ * Исполнитель создаёт провайдера как `new $class($definition, $logger)` — конструктор с такой
  * сигнатурой обязателен (см. BaseProvider).
  */
 interface ProviderInterface
@@ -23,10 +23,4 @@ interface ProviderInterface
      * @throws LlmException при любом сбое — с категорией в ErrorInfo
      */
     public function execute(ResolvedCall $call): Response;
-
-    /** Ключ провайдера в каталоге. */
-    public function key(): string;
-
-    /** Человекочитаемое имя провайдера для логов. */
-    public function name(): string;
 }

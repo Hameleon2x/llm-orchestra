@@ -28,14 +28,14 @@ class OpenAiProvider extends BaseProvider
         'model', 'messages', 'tools', 'tool_choice', 'temperature', 'top_p', 'max_tokens', 'seed', 'stream',
     ];
 
-    public function name(): string
-    {
-        return 'OpenAI';
-    }
-
     protected function defaultBaseUrl(): string
     {
         return 'https://api.openai.com';
+    }
+
+    protected function endpointPath(): string
+    {
+        return '/v1/chat/completions';
     }
 
     /**
@@ -89,6 +89,8 @@ class OpenAiProvider extends BaseProvider
             unset($payload[$key]);
         }
 
+        // Потоковый режим пакет не поддерживает: ответ разбирается целиком.
+        $payload['stream'] = false;
         $payload['model'] = $call->modelName();
         $payload['messages'] = array_map(
             static fn($message) => MessageFactory::toArray($message),

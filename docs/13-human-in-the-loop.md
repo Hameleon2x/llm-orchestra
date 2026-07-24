@@ -76,6 +76,16 @@ You don't have to gate this perfectly yourself: `run()` is **resumable**. Before
 
 A caveat for the interrupted/crash case: re-execution is **at-least-once**, so make tools with side effects idempotent or guard them. `TOOL_CALL` is emitted once, the first time the model requests the call, so re-execution only sends the missing `TOOL_RESULT` — no duplicate call events. (On the happy path, suspend re-runs nothing at all: as soon as the answer lands in the history as a `tool` message, the call counts as answered.)
 
+## What restarts on resume
+
+Resuming is a fresh `run()` call, so everything counted "per run" starts from zero:
+
+- **the run deadline** (`deadlineSeconds`), **the call cap** (the catalog's `maxTotalWaitSeconds`) and **the model cap** (the policy's `maxWaitSeconds`) — by design: the pause waits for a human and may last hours, there is no point charging it to a model's budget;
+- **the tool call budget** (`maxToolCalls`) — a dialog with three pauses may spend three budgets in a row. If you need a cap for the whole dialog, track it yourself and pass what's left in `Config::$maxToolCalls`;
+- **the result counters**: `turnsUsed`, `toolCallsUsed`, `usage` and `attempts` describe the current segment, not the whole dialog. Sum them on your side if you show the total cost.
+
+The only thing carried between segments is the message history — it is the state of the run.
+
 ## Matching by id, not by order
 
 On resume, `tool` messages are matched to calls by `tool_call_id`, not by order. The non-suspend tools of the turn have already written their `tool` messages; you append the suspended ones on resume. The final order (`A, B, q1, q2`, even though the turn was `A, q1, B, q2`) doesn't matter — what matters is that every id is closed.

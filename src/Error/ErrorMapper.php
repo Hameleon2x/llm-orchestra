@@ -130,6 +130,16 @@ final class ErrorMapper
      */
     public static function fromThrowable(Throwable $e): ErrorInfo
     {
+        // Ошибка уровня PHP (TypeError, деление на ноль, обращение к null) — это баг в коде, а не
+        // временный сбой. Повторять её и перебирать из-за неё модели бессмысленно: результат будет
+        // тот же, а счёт вырастет.
+        if ($e instanceof \Error) {
+            $info = new ErrorInfo(ErrorCategory::CONFIG, get_class($e) . ': ' . $e->getMessage(), false);
+            $info->exception = $e;
+
+            return $info;
+        }
+
         $code = (int)$e->getCode();
 
         if ($code >= 400 && $code < 600) {

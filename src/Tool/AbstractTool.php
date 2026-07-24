@@ -3,8 +3,11 @@
 namespace Hameleon2x\Llm\Tool;
 
 /**
- * База для тулзы: дефолтные shouldDisplay() = false, firstUseHint() = '' (без пояснения)
- * и имя ключа пояснения. getName/getDescription/getParameters/execute наследник реализует сам.
+ * База для тулзы: дефолтные firstUseHint() = '' (без пояснения) и имя ключа пояснения.
+ * getName/getDescription/getParameters/execute наследник реализует сам.
+ *
+ * shouldDisplay() — признак для интерфейса приложения: рисовать ли вызов в чате. Движку он не
+ * нужен и в ToolInterface не входит, поэтому свою тулзу можно объявить и без него.
  */
 abstract class AbstractTool implements ToolInterface
 {

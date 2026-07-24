@@ -87,8 +87,8 @@ $config->extraParams = ['plugins' => [...]];  // was: $config->plugins
 
 $result = (new Runner($orchestra))->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 
-if (!$result->success) {
-    echo $result->error->category;            // was: the string $result->error
+if (!$result->success && $result->error !== null) {   // a suspended run has no error
+    echo $result->error->category;                    // was: the string $result->error
 }
 ```
 
@@ -104,6 +104,9 @@ if (!$result->success) {
 - `Response::$model` (the slug) is now `$modelName`; `$modelKey` holds the catalog key.
 - A custom HTTP client is injected via the provider config (`'httpClient' => $client`), and its method takes headers and a timeout: `chat(array $payload, array $headers = [], ?int $timeout = null)`.
 - The `CurlChatClient::DEBUG` constant is replaced by `'debug' => true` in the provider config (logs through PSR-3).
+- `CurlChatClient`'s constructor takes a ready endpoint URL as its first argument: `(string $url, string $token, int $timeout = 120, bool $debug = false, ?LoggerInterface $logger = null)`. Previously the token came first and the transport appended `/v1/chat/completions` itself. Rewrite direct `new CurlChatClient($token, $baseUrl)` calls — otherwise the request goes to a URL built from the token.
+- `ProviderInterface::key()` and `name()` are gone: a custom provider no longer implements them.
+- A custom HTTP client factory receives the ready endpoint URL as its second argument: `function(ProviderDefinition $definition, string $url)`. No more assembling the path from `baseUrl` by hand (and `baseUrl` could be `null`).
 
 ## 0.2.x → 0.3.x
 

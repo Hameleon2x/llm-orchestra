@@ -87,8 +87,8 @@ $config->extraParams = ['plugins' => [...]];  // было: $config->plugins
 
 $result = (new Runner($orchestra))->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 
-if (!$result->success) {
-    echo $result->error->category;            // было: строка $result->error
+if (!$result->success && $result->error !== null) {   // у приостановленного прогона error пуст
+    echo $result->error->category;                    // было: строка $result->error
 }
 ```
 
@@ -104,6 +104,9 @@ if (!$result->success) {
 - `Response::$model` (слаг) теперь `$modelName`; появился `$modelKey` — ключ каталога.
 - Свой HTTP-клиент подставляется конфигом провайдера (`'httpClient' => $client`), а его метод принимает заголовки и таймаут: `chat(array $payload, array $headers = [], ?int $timeout = null)`.
 - Отладочная константа `CurlChatClient::DEBUG` заменена на `'debug' => true` в конфиге провайдера (пишет в PSR-3).
+- Конструктор `CurlChatClient` принимает готовый адрес эндпоинта первым аргументом: `(string $url, string $token, int $timeout = 120, bool $debug = false, ?LoggerInterface $logger = null)`. Раньше первым шёл токен, а путь `/v1/chat/completions` дописывал сам транспорт. Прямые вызовы `new CurlChatClient($token, $baseUrl)` нужно переписать — иначе запрос уйдёт по адресу, собранному из токена.
+- `ProviderInterface::key()` и `name()` удалены: свой провайдер их больше не реализует.
+- Фабрика своего HTTP-клиента получает вторым аргументом готовый адрес эндпоинта: `function(ProviderDefinition $definition, string $url)`. Склеивать путь из `baseUrl` вручную больше не нужно (и `baseUrl` мог быть `null`).
 
 ## 0.2.x → 0.3.x
 

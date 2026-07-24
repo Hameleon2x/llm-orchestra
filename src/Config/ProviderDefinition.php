@@ -50,7 +50,7 @@ final class ProviderDefinition
      */
     public ?ErrorPolicy $policy = null;
 
-    /** Готовый HTTP-клиент или фабрика function(ProviderDefinition): ChatClientInterface. */
+    /** Готовый HTTP-клиент или фабрика function(ProviderDefinition $definition, string $url): ChatClientInterface. */
     public $httpClient = null;
 
     /** Произвольные данные приложения. */
@@ -79,7 +79,7 @@ final class ProviderDefinition
         $definition->baseUrl = isset($config['baseUrl']) && $config['baseUrl'] !== ''
             ? (string)$config['baseUrl']
             : null;
-        $definition->timeout = isset($config['timeout']) ? (int)$config['timeout'] : 120;
+        $definition->timeout = isset($config['timeout']) ? max(1, (int)$config['timeout']) : 120;
         $definition->headers = (array)($config['headers'] ?? []);
         $definition->extraParams = (array)($config['extraParams'] ?? []);
         $definition->capture = (array)($config['capture'] ?? []);

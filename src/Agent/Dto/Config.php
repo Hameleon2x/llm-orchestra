@@ -25,6 +25,9 @@ final class Config
      */
     public ?array $fallback = null;
 
+    /** Сколько переключений на запасную модель разрешено за вызов. null — значение каталога. */
+    public ?int $maxSwitches = null;
+
     /** Политика ошибок на этот прогон. null — политика модели или каталога. */
     public ?ErrorPolicy $policy = null;
 

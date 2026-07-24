@@ -35,7 +35,7 @@ final class Response
     /** Ключ провайдера каталога. */
     public string $providerKey = '';
 
-    /** Служебное: finishReason, latency, attempts. */
+    /** Служебное: finishReason и latency вызова. */
     public array $metadata = [];
 
     /** Данные провайдера по карте capture: reasoning, annotations, refusal и т. п. */
@@ -76,14 +76,6 @@ final class Response
     public function hasToolCalls(): bool
     {
         return $this->toolCalls !== [];
-    }
-
-    /**
-     * Модель не сказала ничего: ни текста, ни вызовов инструментов.
-     */
-    public function isEmpty(): bool
-    {
-        return trim((string)$this->content) === '' && $this->toolCalls === [];
     }
 
     /**

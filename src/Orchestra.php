@@ -16,6 +16,7 @@ use Hameleon2x\Llm\Exception\LlmException;
 use Hameleon2x\Llm\Provider\ProviderInterface;
 use Hameleon2x\Llm\Support\Sleeper;
 use Hameleon2x\Llm\Support\SleeperInterface;
+use ArrayObject;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 use Throwable;
@@ -44,8 +45,16 @@ final class Orchestra
 
     private SleeperInterface $sleeper;
 
-    /** @var array<string, ProviderInterface> инстансы провайдеров по ключу каталога */
-    private array $providers = [];
+    /**
+     * Инстансы провайдеров по ключу каталога.
+     *
+     * Хранятся в объекте намеренно: копии исполнителя (`with*`) разделяют этот кеш, поэтому
+     * переопределение бюджета на каждый оборот не пересоздаёт провайдера и его HTTP-клиент —
+     * иначе фабрика клиента с пулом соединений вызывалась бы на каждое обращение к модели.
+     *
+     * @var ArrayObject<string, ProviderInterface>
+     */
+    private ArrayObject $providers;
 
     /** Политика, перекрывающая политику каталога и моделей. */
     private ?ErrorPolicy $policyOverride = null;
@@ -54,6 +63,9 @@ final class Orchestra
     private ?array $fallbackOverride = null;
 
     private ?int $maxSwitchesOverride = null;
+
+    /** Потолок времени на вызов, перекрывающий каталожный. */
+    private ?float $totalWaitOverride = null;
 
     /** @var callable|null function(AttemptLog $attempt): void */
     private $observer = null;
@@ -66,6 +78,7 @@ final class Orchestra
         $this->registry = $registry;
         $this->logger = $logger ?? new NullLogger();
         $this->sleeper = $sleeper ?? new Sleeper();
+        $this->providers = new ArrayObject();
     }
 
     public function registry(): Registry
@@ -94,6 +107,18 @@ final class Orchestra
         $clone = clone $this;
         $clone->fallbackOverride = array_values($chain);
         $clone->maxSwitchesOverride = $maxSwitches;
+
+        return $clone;
+    }
+
+    /**
+     * Копия с другим потолком времени на весь вызов — когда вызывающий знает, сколько времени у
+     * него осталось. Так агентский цикл проецирует свой дедлайн на каждое обращение к модели.
+     */
+    public function withTotalWaitSeconds(?float $seconds): self
+    {
+        $clone = clone $this;
+        $clone->totalWaitOverride = $seconds;
 
         return $clone;
     }
@@ -131,16 +156,13 @@ final class Orchestra
 
             $model = $this->registry->model($this->registry->normalize($modelKey));
         } catch (LlmConfigException $e) {
-            $response = Response::failed($e->info());
-            $response->metadata['attempts'] = 0;
-
-            return $response;
+            return Response::failed($e->info());
         }
 
-        $rootPolicy = $this->policyOverride ?? $this->registry->policyFor($model);
+        $startPolicy = $this->policyOverride ?? $this->registry->policyFor($model);
         $chain = $this->fallbackOverride ?? $this->registry->fallbackChain();
         $maxSwitches = $this->maxSwitchesOverride ?? $this->registry->maxSwitches();
-        $totalWait = $this->registry->maxTotalWaitSeconds();
+        $totalWait = $this->totalWaitOverride ?? $this->registry->maxTotalWaitSeconds();
 
         $attempts = [];
         $attempted = [];
@@ -155,14 +177,13 @@ final class Orchestra
             $outcome = $this->runModel($request, $model, $policy, $attempts, $startedAt, $totalWait);
             if ($outcome instanceof Response) {
                 $outcome->attempts = $attempts;
-                $outcome->metadata['attempts'] = count($attempts);
 
                 return $outcome;
             }
 
             $error = $outcome;
 
-            if (!$rootPolicy->shouldFallback($error)) {
+            if (!$startPolicy->shouldFallback($error)) {
                 break;
             }
 
@@ -202,7 +223,6 @@ final class Orchestra
 
         $response = Response::failed($error);
         $response->attempts = $attempts;
-        $response->metadata['attempts'] = count($attempts);
 
         return $response;
     }
@@ -238,7 +258,8 @@ final class Orchestra
                     $request,
                     $model,
                     $this->registry->providerOf($model),
-                    $this->registry->defaultParams()
+                    $this->registry->defaultParams(),
+                    $this->timeoutCap($totalWait, $startedAt)
                 );
                 $response = $this->provider($model)->execute($call);
 
@@ -342,6 +363,19 @@ final class Orchestra
     }
 
     /**
+     * Сколько секунд осталось у вызова — этим ограничивается таймаут следующего запроса, чтобы он
+     * не пережил бюджет. null — бюджета нет, таймаут берётся из каталога как есть.
+     */
+    private function timeoutCap(?float $totalWait, float $startedAt): ?int
+    {
+        if ($totalWait === null) {
+            return null;
+        }
+
+        return (int)ceil(max(1.0, $totalWait - (microtime(true) - $startedAt)));
+    }
+
+    /**
      * Выйдет ли пауза за отведённый бюджет времени, отсчитываемый от $since.
      *
      * @param float|null $budget потолок в секундах; null — без потолка
@@ -356,19 +390,23 @@ final class Orchestra
     }
 
     /**
-     * Провайдер модели. Инстансы кешируются: один транспорт обслуживает все свои модели.
+     * Провайдер модели. Инстансы кешируются: один транспорт обслуживает все свои модели, и кеш
+     * переживает копирование исполнителя.
      */
     private function provider(ModelDefinition $model): ProviderInterface
     {
         $key = $model->provider;
-        if (isset($this->providers[$key])) {
-            return $this->providers[$key];
+        if ($this->providers->offsetExists($key)) {
+            return $this->providers->offsetGet($key);
         }
 
         $definition = $this->registry->provider($key);
         $class = $definition->class;
 
-        return $this->providers[$key] = new $class($definition, $this->logger);
+        $provider = new $class($definition, $this->logger);
+        $this->providers->offsetSet($key, $provider);
+
+        return $provider;
     }
 
     /**

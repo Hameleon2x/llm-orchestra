@@ -18,8 +18,6 @@ If the API is OpenAI-compatible and only the address differs, you don't need to 
 interface ProviderInterface
 {
     public function execute(ResolvedCall $call): Response;   // throws LlmException
-    public function key(): string;                           // provider key in the catalog
-    public function name(): string;                          // name for logs
 }
 ```
 
@@ -59,14 +57,15 @@ use Hameleon2x\Llm\Support\ArrayPath;
 
 final class MyProvider extends BaseProvider
 {
-    public function name(): string
-    {
-        return 'MyProvider';
-    }
-
     protected function defaultBaseUrl(): string
     {
         return 'https://api.example.com';
+    }
+
+    /** The endpoint path: the provider owns the API format, the transport gets a ready URL. */
+    protected function endpointPath(): string
+    {
+        return '/v1/chat';
     }
 
     /** Response fields the application will get via $response->extra(). */
@@ -154,7 +153,7 @@ Classify at least three situations correctly, or retries and fallback will work 
 
 ## Extending OpenAiProvider
 
-If the API is OpenAI-compatible but parses a bit differently, extend `OpenAiProvider` and override selectively: `defaultBaseUrl()`, `defaultCapture()`, `buildPayload()`, `parse()`, `parseUsage()`, `parseToolCalls()`, `normalizeContent()`. That's how `OpenRouterProvider` and `RequestyProvider` are built — they differ only in the base URL and the name.
+If the API is OpenAI-compatible but parses a bit differently, extend `OpenAiProvider` and override selectively: `defaultBaseUrl()`, `endpointPath()`, `defaultCapture()`, `buildPayload()`, `parse()`, `parseUsage()`, `parseToolCalls()`, `normalizeContent()`. That's how `OpenRouterProvider` and `RequestyProvider` are built — they differ only in the base URL.
 
 ## See also
 

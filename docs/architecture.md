@@ -25,14 +25,14 @@ Each layer below knows nothing about the layer above it. The provider doesn't de
 - **`Registry`** — the catalog and its validation, resolving model keys, the default policy and chain. Doesn't execute requests.
 - **`Orchestra`** — merging settings, retries, model switching, the attempt log, writing to PSR-3. Doesn't know about the API format or the dialog content.
 - **`Provider\*`** — building the payload and parsing the response, classifying failures. Doesn't retry and doesn't pick the model.
-- **`Http\CurlChatClient`** — sending HTTP and transport errors. Hands a successful body to the provider as is; parses only an error response, to attach a category to the failure.
+- **`Http\CurlChatClient`** — sending HTTP and transport errors. The endpoint URL and the payload come from the provider; a successful body is handed back as is, only an error response is parsed — to attach a category to the failure.
 - **`Agent\Runner`** — the turn loop, executing tools, limits, resuming. Retries and model switching are not its concern.
 - **`Tool\*`, `Agent\Toolbox*`** — tool schemas and execution. Don't talk to the model.
 
 ## The path of a single request
 
 1. `Orchestra::execute($request, $modelKey)` looks the model up in the catalog by key; an empty key means `defaultModel`.
-2. `ResolvedCall::build()` merges three levels: catalog → model → call. Generation params by explicitness, arbitrary fields and headers recursively, `unsupported` stripped on top of everything.
+2. `ResolvedCall::build()` merges the setting levels. Generation params by explicitness: catalog → model → call. Arbitrary payload fields and headers merge recursively: provider → model → call (they have no catalog level). The model's `unsupported` is applied on top of everything.
 3. The provider builds the payload, calls the transport, parses the response, and applies the `capture` map.
 4. Success is a `Response` with `content`/`toolCalls`, `usage`, `extra`, and the raw response. Failure is an `LlmException` with a category.
 5. `Orchestra` records the attempt in the log, decides — retry, hand off to the next model in the chain, or return the error — and notifies the observer with that decision already made (`willRetry`, `nextDelay`).

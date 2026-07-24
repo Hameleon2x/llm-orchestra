@@ -10,6 +10,7 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 
 - **`model`** (`?string`, default `null`) — the catalog model key. `null` — the catalog's default model.
 - **`fallback`** (`?string[]`, `null`) — the backup model chain for this run. `null` — the catalog's chain.
+- **`maxSwitches`** (`?int`, `null`) — how many switches to a backup model are allowed per call. `null` — the catalog value.
 - **`policy`** (`?ErrorPolicy`, `null`) — the retry policy for this run. `null` — the model's or the catalog's policy.
 - **`stickyFallback`** (`bool`, `true`) — after a switch, continue the run on the model that answered.
 
@@ -75,6 +76,8 @@ The result is marked `Finish::TOOL_LIMIT`, and the nudge's token spend is includ
 ## `deadlineSeconds`
 
 Checked before every turn. On expiry the run returns a `Result` with an error of category `deadline`, `finish = Finish::DEADLINE`, and the full history — accumulated tool results are not lost.
+
+The deadline also holds inside a turn: the remaining time is passed to the executor as the wait cap for that call, so retries and model switches cannot carry the run far past it. A request already in flight is still bounded only by `timeout`.
 
 ## `params` and `extraParams`
 

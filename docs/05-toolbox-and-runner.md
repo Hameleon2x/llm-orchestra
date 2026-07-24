@@ -173,12 +173,12 @@ Two limits guard against endless work:
 
 What happens when they run out:
 
-- **`maxToolCalls` exhausted.** The remaining calls of this turn are closed with an error, the message `limitNudgeMessage` ("no more data is coming, give a final answer") is added to the history, and one more request is made — this time without tools. The model's answer becomes the result; if it stayed silent, `limitFallbackText` is returned. This request goes beyond the turn budget and does not increase `turnsUsed`. In both cases `$success` is `true` and `$finish` is `Finish::TOOL_LIMIT`. If that request itself fails (network, context length, unavailability), the run returns an error with a category, just like on any turn — no placeholder is substituted for it.
+- **`maxToolCalls` exhausted.** The remaining calls of this turn are closed with an error, the message `limitNudgeMessage` ("no more data is coming, give a final answer") is added to the history, and one more request is made — this time without tools. The model's answer becomes the result; if it returns a turn with no text, that is an `empty_response` failure — `limitFallbackText` is left for the rare case when the answer holds only unrequested tool calls. This request goes beyond the turn budget and does not increase `turnsUsed`. In both cases `$success` is `true` and `$finish` is `Finish::TOOL_LIMIT`. If that request itself fails (network, context length, unavailability), the run returns an error with a category, just like on any turn — no placeholder is substituted for it.
 - **`maxTurns` exhausted.** `turnsExhaustedText` is appended to the history and also lands in `$content`. `$success` is `true`, `$finish` is `Finish::TURNS_EXHAUSTED`.
 
 Both cases are not an error but a normal completion within budget. `$finish` helps you tell them apart from a full answer.
 
-The third limiter is the deadline: `$config->deadlineSeconds`. It is checked before every turn, and on expiry the run returns an error of category `deadline` along with the full history: the tool results collected so far are not lost. The check sits at the start of a turn, so finishing off unanswered calls on resume and the tool-limit follow-up request happen outside it.
+The third limiter is the deadline: `$config->deadlineSeconds`. It is checked before every turn, and on expiry the run returns an error of category `deadline` along with the full history: the tool results collected so far are not lost. The check sits at the start of a turn, and the remaining time is passed to the executor as the wait cap for the call — so retries and switches inside a turn are bounded too. Only finishing off unanswered calls on resume happens outside it.
 
 ## Hint on a tool's first call
 

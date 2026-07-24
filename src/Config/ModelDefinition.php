@@ -104,7 +104,7 @@ final class ModelDefinition
         $definition->extraParams = (array)($config['extraParams'] ?? []);
         $definition->headers = (array)($config['headers'] ?? []);
         $definition->capture = (array)($config['capture'] ?? []);
-        $definition->timeout = isset($config['timeout']) ? (int)$config['timeout'] : null;
+        $definition->timeout = isset($config['timeout']) ? max(1, (int)$config['timeout']) : null;
         $definition->tags = (array)($config['tags'] ?? []);
         $definition->meta = (array)($config['meta'] ?? []);
 

@@ -11,14 +11,12 @@ use Psr\Log\NullLogger;
 /**
  * Транспорт на расширении cURL. Внешних HTTP-зависимостей у пакета нет.
  *
- * Сбои приводятся к категориям здесь же: код cURL и HTTP-статус разбирает ErrorMapper, наружу
- * уходит LlmException с готовым ErrorInfo.
+ * Про формат запроса не знает ничего: адрес эндпоинта, поля payload и разбор ответа — дело
+ * провайдера. Здесь только отправка и приведение HTTP-сбоев к категориям: код cURL и статус
+ * разбирает ErrorMapper, наружу уходит LlmException с готовым ErrorInfo.
  */
 final class CurlChatClient implements ChatClientInterface
 {
-    private const DEFAULT_BASE_URL = 'https://api.openai.com';
-    private const CHAT_PATH        = '/v1/chat/completions';
-
     private string $url;
     private string $token;
     private int    $timeout;
@@ -26,15 +24,17 @@ final class CurlChatClient implements ChatClientInterface
 
     private LoggerInterface $logger;
 
+    /**
+     * @param string $url полный адрес эндпоинта, включая путь
+     */
     public function __construct(
+        string           $url,
         string           $token,
-        ?string          $baseUrl = null,
         int              $timeout = 120,
         bool             $debug = false,
         ?LoggerInterface $logger = null
     ) {
-        $baseUrl = rtrim($baseUrl ?? self::DEFAULT_BASE_URL, '/');
-        $this->url = $baseUrl . self::CHAT_PATH;
+        $this->url = $url;
         $this->token = $token;
         $this->timeout = $timeout > 0 ? $timeout : 120;
         $this->debug = $debug;
@@ -43,7 +43,6 @@ final class CurlChatClient implements ChatClientInterface
 
     public function chat(array $payload, array $headers = [], ?int $timeout = null): string
     {
-        $payload['stream'] = false;
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
         if ($body === false) {
             // Обычно это битая кодировка в сообщениях. Без явной ошибки провайдер получил бы пустое

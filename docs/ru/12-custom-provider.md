@@ -18,8 +18,6 @@
 interface ProviderInterface
 {
     public function execute(ResolvedCall $call): Response;   // throws LlmException
-    public function key(): string;                           // ключ провайдера в каталоге
-    public function name(): string;                          // имя для логов
 }
 ```
 
@@ -59,14 +57,15 @@ use Hameleon2x\Llm\Support\ArrayPath;
 
 final class MyProvider extends BaseProvider
 {
-    public function name(): string
-    {
-        return 'MyProvider';
-    }
-
     protected function defaultBaseUrl(): string
     {
         return 'https://api.example.com';
+    }
+
+    /** Путь эндпоинта: формат API знает провайдер, транспорт получает готовый адрес. */
+    protected function endpointPath(): string
+    {
+        return '/v1/chat';
     }
 
     /** Поля ответа, которые приложение получит через $response->extra(). */
@@ -154,7 +153,7 @@ throw LlmException::of(ErrorCategory::CONTENT_FILTER, 'Ответ заблоки
 
 ## Наследование OpenAiProvider
 
-Если API OpenAI-совместимый, но с особенностями разбора, наследуйте `OpenAiProvider` и переопределяйте точечно: `defaultBaseUrl()`, `defaultCapture()`, `buildPayload()`, `parse()`, `parseUsage()`, `parseToolCalls()`, `normalizeContent()`. Так сделаны `OpenRouterProvider` и `RequestyProvider` — у них отличаются только базовый URL и имя.
+Если API OpenAI-совместимый, но с особенностями разбора, наследуйте `OpenAiProvider` и переопределяйте точечно: `defaultBaseUrl()`, `endpointPath()`, `defaultCapture()`, `buildPayload()`, `parse()`, `parseUsage()`, `parseToolCalls()`, `normalizeContent()`. Так сделаны `OpenRouterProvider` и `RequestyProvider` — у них отличается только базовый URL.
 
 ## См. также
 

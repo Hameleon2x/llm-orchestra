@@ -180,19 +180,22 @@ final class Registry
     }
 
     /**
-     * Привести значение к ключу каталога: неизвестное или пустое заменяется на $fallback,
-     * а если он не задан — на модель каталога по умолчанию.
+     * Привести значение к ключу каталога: неизвестное или пустое заменяется на $default, а если он
+     * не задан — на модель каталога по умолчанию.
+     *
+     * Слово «fallback» здесь намеренно не используется: цепочка фолбэка — про эскалацию при сбое,
+     * а тут речь о подстановке вместо неизвестного значения.
      *
      * @throws LlmConfigException если подставить нечего
      */
-    public function normalize(?string $key, ?string $fallback = null): string
+    public function normalize(?string $key, ?string $default = null): string
     {
         $model = $this->findModel($key);
         if ($model !== null) {
             return $model->key;
         }
 
-        $model = $this->findModel($fallback) ?? $this->findModel($this->defaultModel);
+        $model = $this->findModel($default) ?? $this->findModel($this->defaultModel);
         if ($model === null) {
             throw new LlmConfigException(
                 'Не удалось выбрать модель: значение неизвестно, а модель по умолчанию в каталоге не задана.'

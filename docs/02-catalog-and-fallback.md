@@ -71,7 +71,7 @@ That is the whole catalog. Next — what else you can specify in it.
 
 What you can set:
 
-- **`class`** (required) — a `ProviderInterface` implementation. Built in: `OpenAiProvider`, `OpenRouterProvider`, `RequestyProvider` — they speak the same OpenAI-compatible API and differ in address and name. Your own provider — [12-custom-provider.md](12-custom-provider.md).
+- **`class`** (required) — a `ProviderInterface` implementation. Built in: `OpenAiProvider`, `OpenRouterProvider`, `RequestyProvider` — they speak the same OpenAI-compatible API and differ only in the address. Your own provider — [12-custom-provider.md](12-custom-provider.md).
 - **`token`** — the auth key. Empty is fine: local gateways don't require it.
 - **`baseUrl`** — the API address without the endpoint path. Defaults to the value from the provider class; set it if you work through a proxy or a self-hosted gateway.
 - **`timeout`** — request timeout in seconds, `120` by default. A model can override it with its own.
@@ -284,6 +284,8 @@ It is easy to end up with unpleasant arithmetic here: a 600-second timeout with 
 **`maxWaitSeconds` is about a model**, which is why it lives in the policy: next to `retries`, `delay` and `backoff`, so it can be set on the model, on its provider or in `defaultPolicy`. It counts from that model's first attempt and **restarts after a switch**: if a slow starting model burned its five minutes, the backup gets its own five, not the remainder. When the budget runs out, retries stop and the work goes to the next model in the chain.
 
 **`maxTotalWaitSeconds` is about the whole call**, so it is a catalog key next to `fallback` and `maxSwitches`: it does not depend on which model is running. It counts from the start of the call; when it runs out, both retries and switches stop and the last error is returned.
+
+None of the caps is set by default: with the default 120 s timeout, 2 retries and 2 switches a single call takes about twenty minutes in the worst case, and an agent run takes hours. If you call this from a web request, set the caps explicitly.
 
 Both caps account for all the time spent, not just the pauses, and neither interrupts a request already in flight — that is the `timeout`'s job. So the actual duration may exceed a cap by the length of the last request.
 

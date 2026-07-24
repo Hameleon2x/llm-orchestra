@@ -114,8 +114,8 @@ final class Request
 
     /**
      * Дополнительные поля payload на этот вызов. Сливаются поверх полей провайдера и модели;
-     * стандартные поля (model, messages, temperature, top_p, max_tokens, tools, tool_choice, seed)
-     * перезаписать нельзя — для них есть параметры генерации.
+     * стандартные поля (model, messages, temperature, top_p, max_tokens, tools, tool_choice, seed,
+     * stream) перезаписать нельзя — для них есть параметры генерации.
      *
      * @param array<string, mixed> $extraParams
      */

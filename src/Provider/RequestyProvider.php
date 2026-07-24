@@ -7,11 +7,6 @@ namespace Hameleon2x\Llm\Provider;
  */
 class RequestyProvider extends OpenAiProvider
 {
-    public function name(): string
-    {
-        return 'Requesty';
-    }
-
     protected function defaultBaseUrl(): string
     {
         return 'https://router.requesty.ai';

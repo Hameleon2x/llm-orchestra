@@ -50,7 +50,8 @@ final class ResolvedCall
         Request            $request,
         ModelDefinition    $model,
         ProviderDefinition $provider,
-        GenerationParams   $defaultParams
+        GenerationParams   $defaultParams,
+        ?int               $timeoutCap = null
     ): self {
         $call = new self();
         $call->request = $request;
@@ -62,6 +63,11 @@ final class ResolvedCall
         $call->headers = Merge::layers($provider->headers, $model->headers, $request->headers);
         $call->capture = Merge::layers($provider->capture, $model->capture);
         $call->timeout = $model->timeout ?? $provider->timeout;
+        if ($timeoutCap !== null) {
+            // Запрос не должен переживать бюджет вызова: иначе потолок времени обещал бы больше,
+            // чем удерживает.
+            $call->timeout = max(1, min($call->timeout, $timeoutCap));
+        }
         $call->keepRaw = $provider->keepRaw;
 
         return $call;

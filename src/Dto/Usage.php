@@ -59,16 +59,9 @@ final class Usage
         if (!isset($this->byModel[$modelKey])) {
             $this->byModel[$modelKey] = new self();
         }
-        $slice = $this->byModel[$modelKey];
-        $slice->calls += max(1, $other->calls);
-        $slice->promptTokens += $other->promptTokens;
-        $slice->completionTokens += $other->completionTokens;
-        $slice->totalTokens += $other->totalTokens;
-        $slice->cachedTokens += $other->cachedTokens;
-        $slice->reasoningTokens += $other->reasoningTokens;
-        if ($other->cost !== null) {
-            $slice->cost = ($slice->cost ?? 0.0) + $other->cost;
-        }
+
+        // Срез считается тем же кодом, но уже без разбивки: вложенных срезов у него не бывает.
+        $this->byModel[$modelKey]->add($other);
     }
 
     public function toArray(): array

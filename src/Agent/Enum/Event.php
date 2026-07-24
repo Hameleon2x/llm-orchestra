@@ -23,7 +23,7 @@ final class Event
     /**
      * Результат инструмента.
      * content — JSON результата; meta: tool_call_id, tool, ok (успех инструмента),
-     * guard (true, если вызов отклонён проверкой аргументов).
+     * guard (true, если вызов отклонён проверкой аргументов), exception (true, если инструмент упал).
      */
     public const TOOL_RESULT = 'tool_result';
 

@@ -36,12 +36,12 @@ A ready-made object or a factory is specified in the provider config:
     'openrouter' => [
         'class'      => OpenRouterProvider::class,
         'token'      => 'sk-or-...',
-        'httpClient' => fn(ProviderDefinition $def) => new MyClient($def->token, $def->baseUrl),
+        'httpClient' => fn(ProviderDefinition $def, string $url) => new MyClient($url, $def->token),
     ],
 ],
 ```
 
-The factory receives a `ProviderDefinition` — that's where the token, `baseUrl`, timeout, and the `debug` flag come from.
+The factory receives a `ProviderDefinition` (token, timeout, the `debug` flag) and the ready endpoint URL as its second argument: the provider owns the path, so there is nothing to assemble by hand.
 
 ## Let's start simple: a client for tests
 
@@ -118,20 +118,18 @@ final class Psr18ChatClient implements ChatClientInterface
         ClientInterface $client,
         RequestFactoryInterface $requests,
         StreamFactoryInterface $streams,
-        string $baseUrl,
+        string $url,
         string $token
     ) {
         $this->client = $client;
         $this->requests = $requests;
         $this->streams = $streams;
-        $this->url = rtrim($baseUrl, '/') . '/v1/chat/completions';
+        $this->url = $url;
         $this->token = $token;
     }
 
     public function chat(array $payload, array $headers = [], ?int $timeout = null): string
     {
-        $payload['stream'] = false;
-
         $request = $this->requests->createRequest('POST', $this->url)
             ->withHeader('Content-Type', 'application/json')
             ->withHeader('Accept', 'application/json')

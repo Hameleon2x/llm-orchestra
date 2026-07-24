@@ -10,11 +10,6 @@ namespace Hameleon2x\Llm\Provider;
  */
 class OpenRouterProvider extends OpenAiProvider
 {
-    public function name(): string
-    {
-        return 'OpenRouter';
-    }
-
     protected function defaultBaseUrl(): string
     {
         return 'https://openrouter.ai/api';

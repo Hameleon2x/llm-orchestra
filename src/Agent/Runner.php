@@ -70,10 +70,16 @@ class Runner
         $emit = $this->safeEmit($emit);
 
         $startedAt = microtime(true);
-        $tools = $toolbox->definitions();
+        $usage = new Usage();
+
+        try {
+            $tools = $toolbox->definitions();
+        } catch (Throwable $e) {
+            return $this->failedOnAppCode('Реестр инструментов не собрался', $e, $messages, $usage);
+        }
+
         $paramNames = $this->collectParamNames($tools);
         $toolCallsLeft = $config->maxToolCalls;
-        $usage = new Usage();
         $attempts = [];
         $currentModel = $config->model;
         $lastResponse = null;
@@ -105,7 +111,7 @@ class Runner
             // ещё один запрос к модели на ход, все вызовы которого всё равно будут отклонены.
             if ($outcome['limitExhausted']) {
                 return $this->finishOnToolLimit(
-                    $orchestra,
+                    $this->withinDeadline($orchestra, $config, $startedAt),
                     $messages,
                     $systemPromptFn,
                     $config,
@@ -141,10 +147,24 @@ class Runner
             // Системный промт между оборотами неизменен: стабильный префикс запроса позволяет
             // провайдеру переиспользовать кеш промпта. Пояснения по инструментам подмешиваются
             // в результат инструмента при первом вызове (см. executeToolCalls).
-            $systemPrompt = (string)$systemPromptFn($messages);
+            try {
+                $systemPrompt = (string)$systemPromptFn($messages);
+            } catch (Throwable $e) {
+                return $this->failedOnAppCode(
+                    'Не удалось собрать системный промт',
+                    $e,
+                    $messages,
+                    $usage,
+                    $turnsUsed,
+                    $toolCallsUsed,
+                    $currentModel,
+                    $attempts,
+                    $lastResponse
+                );
+            }
 
             $request = $this->buildRequest($systemPrompt, $messages, $tools, $config);
-            $response = $orchestra->execute($request, $currentModel);
+            $response = $this->withinDeadline($orchestra, $config, $startedAt)->execute($request, $currentModel);
 
             $attempts = array_merge($attempts, $response->attempts);
             // Потребление считаем только по состоявшимся вызовам: у неудачной попытки блока usage
@@ -233,7 +253,7 @@ class Runner
 
             if ($outcome['limitExhausted']) {
                 return $this->finishOnToolLimit(
-                    $orchestra,
+                    $this->withinDeadline($orchestra, $config, $startedAt),
                     $messages,
                     $systemPromptFn,
                     $config,
@@ -261,6 +281,64 @@ class Runner
             $attempts,
             $lastResponse
         );
+    }
+
+    /**
+     * Прогон, оборванный сбоем прикладного кода: системного промта или реестра инструментов.
+     *
+     * Пробрасывать такое исключение нельзя — вместе с ним потерялась бы вся история, которая живёт
+     * внутри run(), а инструменты этого прогона уже отработали с побочными эффектами. Категория —
+     * `config`: чинится не повтором, а исправлением кода приложения.
+     *
+     * @param Message[]    $messages
+     * @param AttemptLog[] $attempts
+     */
+    private function failedOnAppCode(
+        string    $what,
+        Throwable $e,
+        array     $messages,
+        Usage     $usage,
+        int       $turnsUsed = 0,
+        int       $toolCallsUsed = 0,
+        ?string   $modelKey = null,
+        array     $attempts = [],
+        ?Response $lastResponse = null
+    ): Result {
+        $this->logger->error('LLM run aborted by application code', [
+            'stage'     => $what,
+            'message'   => $e->getMessage(),
+            'exception' => get_class($e),
+        ]);
+
+        $error = new ErrorInfo(ErrorCategory::CONFIG, $what . ': ' . $e->getMessage(), false);
+
+        return $this->finalize(
+            Result::error($error, $messages, $turnsUsed, $toolCallsUsed, $usage),
+            $modelKey,
+            $attempts,
+            $lastResponse
+        );
+    }
+
+    /**
+     * Исполнитель, которому осталось не больше времени, чем осталось у прогона.
+     *
+     * Без этого срок прогона проверялся бы только на границе оборота, и один оборот с повторами и
+     * переключениями законно уезжал бы далеко за дедлайн. Потолок каталога при этом не повышается —
+     * берётся меньшее из двух.
+     */
+    private function withinDeadline(Orchestra $orchestra, Config $config, float $startedAt): Orchestra
+    {
+        if ($config->deadlineSeconds === null) {
+            return $orchestra;
+        }
+
+        $left = $config->deadlineSeconds - (microtime(true) - $startedAt);
+        $left = max(0.0, $left);
+
+        $catalog = $orchestra->registry()->maxTotalWaitSeconds();
+
+        return $orchestra->withTotalWaitSeconds($catalog === null ? $left : min($left, $catalog));
     }
 
     /**
@@ -296,8 +374,11 @@ class Runner
         if ($config->policy !== null) {
             $orchestra = $orchestra->withPolicy($config->policy);
         }
-        if ($config->fallback !== null) {
-            $orchestra = $orchestra->withFallback($config->fallback);
+        if ($config->fallback !== null || $config->maxSwitches !== null) {
+            $orchestra = $orchestra->withFallback(
+                $config->fallback ?? $orchestra->registry()->fallbackChain(),
+                $config->maxSwitches
+            );
         }
 
         $seenModel = null;
@@ -373,7 +454,22 @@ class Runner
         $messagesBeforeNudge = $messages;
         $messages[] = Message::user($config->limitNudgeMessage);
 
-        $systemPrompt = (string)$systemPromptFn($messages);
+        try {
+            $systemPrompt = (string)$systemPromptFn($messages);
+        } catch (Throwable $e) {
+            return $this->failedOnAppCode(
+                'Не удалось собрать системный промт',
+                $e,
+                $messagesBeforeNudge,
+                $usage,
+                $turnsUsed,
+                $toolCallsUsed,
+                $modelKey,
+                $attempts,
+                $lastResponse
+            );
+        }
+
         $request = Request::messages(array_merge([Message::system($systemPrompt)], $messages));
         $request->setParams($config->params);
         if ($config->extraParams !== []) {
@@ -382,6 +478,7 @@ class Runner
 
         $response = $orchestra->execute($request, $modelKey);
         $attempts = array_merge($attempts, $response->attempts);
+
         if ($response->isSuccess()) {
             $usage->add($response->usage, $response->modelKey);
         }
@@ -528,9 +625,19 @@ class Runner
             // читать поля ответа. Дописывается в хвост истории один раз за диалог, поэтому
             // системный префикс запроса остаётся стабильным.
             if ($this->isFirstUse($toolName, $toolCall->id, $messages)) {
-                $hint = trim($toolbox->firstUseHint($toolName));
-                if ($hint !== '') {
-                    $resultArray[$toolbox->firstUseHintKey($toolName)] = $hint;
+                try {
+                    $hint = trim($toolbox->firstUseHint($toolName));
+                    if ($hint !== '') {
+                        $resultArray[$toolbox->firstUseHintKey($toolName)] = $hint;
+                    }
+                } catch (Throwable $e) {
+                    // Пояснение необязательно, а инструмент уже отработал: уронить прогон здесь
+                    // значит потерять его результат и получить повторное исполнение при следующем
+                    // запуске.
+                    $this->logger->warning('LLM first-use hint failed', [
+                        'tool'    => $toolName,
+                        'message' => $e->getMessage(),
+                    ]);
                 }
             }
 

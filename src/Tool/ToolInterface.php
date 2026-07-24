@@ -45,9 +45,4 @@ interface ToolInterface
      * @param array $args декодированные аргументы от LLM
      */
     public function execute(array $args): Result;
-
-    /**
-     * Нужно ли рендерить вызов тулзы в UI чата (виджеты, превью результата).
-     */
-    public function shouldDisplay(array $args): bool;
 }

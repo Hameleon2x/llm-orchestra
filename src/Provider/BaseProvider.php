@@ -31,20 +31,24 @@ abstract class BaseProvider implements ProviderInterface
         $this->logger = $logger ?? new NullLogger();
     }
 
-    public function key(): string
-    {
-        return $this->definition->key;
-    }
-
-    public function name(): string
-    {
-        return static::class;
-    }
-
     /**
      * Базовый URL API, если в каталоге он не задан.
      */
     abstract protected function defaultBaseUrl(): string;
+
+    /**
+     * Путь эндпоинта относительно базового URL. Формат API — знание провайдера, поэтому транспорт
+     * получает уже собранный адрес и о путях ничего не знает.
+     */
+    abstract protected function endpointPath(): string;
+
+    /**
+     * Полный адрес, по которому провайдер зовёт модель.
+     */
+    protected function endpointUrl(): string
+    {
+        return rtrim($this->definition->baseUrl ?? $this->defaultBaseUrl(), '/') . $this->endpointPath();
+    }
 
     /**
      * Карта извлечения полей ответа по умолчанию: наше имя => путь или список путей.
@@ -73,12 +77,14 @@ abstract class BaseProvider implements ProviderInterface
         }
 
         if (is_callable($configured)) {
-            return $this->client = $configured($this->definition);
+            // Готовый адрес отдаём и своему клиенту: путь эндпоинта знает провайдер, и собирать
+            // его вручную в каждой фабрике незачем.
+            return $this->client = $configured($this->definition, $this->endpointUrl());
         }
 
         return $this->client = new CurlChatClient(
+            $this->endpointUrl(),
             $this->definition->token,
-            $this->definition->baseUrl ?? $this->defaultBaseUrl(),
             $this->definition->timeout,
             $this->definition->debug,
             $this->logger
