@@ -122,6 +122,24 @@ test('неизвестный ключ в записи модели, провай
     ]));
 });
 
+test('неизвестный ключ верхнего уровня каталога отвергается', static function (): void {
+    $message = assertThrows(LlmConfigException::class, static fn() => catalogOf(new FakeChatClient(), [
+        'defaultModl' => 'm',
+    ]));
+    assertContains('defaultModl', $message);
+});
+
+test('pricing с неверными ключами не проходит молча', static function (): void {
+    assertThrows(LlmConfigException::class, static fn() => catalogOf(new FakeChatClient(), [
+        'models' => ['m' => ['provider' => 'p', 'name' => 'slug', 'pricing' => ['input' => 1.25]]],
+    ]));
+
+    // Корректная цена по-прежнему считается.
+    assertSame(3.0, catalogOf(new FakeChatClient(), [
+        'models' => ['m' => ['provider' => 'p', 'name' => 'slug', 'pricing' => ['in' => 1.0, 'out' => 2.0]]],
+    ])->costOf('m', 1000000, 1000000));
+});
+
 suite('Каталог: потолки времени');
 
 test('потолок вызова по умолчанию конечный, явный null его снимает', static function (): void {

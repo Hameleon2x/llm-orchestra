@@ -8,6 +8,7 @@ use Hameleon2x\Llm\Config\GenerationParams;
 use Hameleon2x\Llm\Config\ModelDefinition;
 use Hameleon2x\Llm\Config\ProviderDefinition;
 use Hameleon2x\Llm\Exception\LlmConfigException;
+use Hameleon2x\Llm\Support\ConfigKeys;
 
 /**
  * Каталог: провайдеры-транспорты, модели, дефолты генерации, политика ошибок и цепочка фолбэка.
@@ -80,6 +81,12 @@ final class Registry
      */
     public static function fromArray(array $config): self
     {
+        ConfigKeys::assertKnown(
+            $config,
+            ['providers', 'models', 'defaultModel', 'defaultParams', 'defaultPolicy', 'fallback', 'maxSwitches', 'maxTotalWaitSeconds', 'defaultRun'],
+            'Каталог LLM'
+        );
+
         $registry = new self();
 
         if (isset($config['defaultParams']) && is_array($config['defaultParams'])) {

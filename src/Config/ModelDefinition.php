@@ -130,9 +130,18 @@ final class ModelDefinition
         }
 
         if (isset($config['pricing']) && is_array($config['pricing'])) {
+            // Цена задана — оба ключа обязательны и числовые. Опечатка (`input` вместо `in`) иначе
+            // тихо дала бы цену 0, и costOf() вернул бы «бесплатно» вместо «цена неизвестна».
+            if (!isset($config['pricing']['in'], $config['pricing']['out'])
+                || !is_numeric($config['pricing']['in']) || !is_numeric($config['pricing']['out'])
+            ) {
+                throw new LlmConfigException(
+                    "Модель «{$key}»: pricing должен содержать числовые in и out (цена за миллион токенов)."
+                );
+            }
             $definition->pricing = [
-                'in'  => (float)($config['pricing']['in'] ?? 0),
-                'out' => (float)($config['pricing']['out'] ?? 0),
+                'in'  => (float)$config['pricing']['in'],
+                'out' => (float)$config['pricing']['out'],
             ];
         }
 
