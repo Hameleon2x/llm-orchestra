@@ -42,9 +42,9 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 All fields are public — set them directly:
 
 ```php
-use Hameleon2x\Llm\Agent\Dto\Config;
+use Hameleon2x\Llm\Agent\Dto\RunOptions;
 
-$config = new Config();
+$config = new RunOptions();
 $config->model = 'glm-4.6';
 $config->maxTurns = 16;
 $config->maxToolCalls = 12;

@@ -2,7 +2,7 @@
 
 namespace Hameleon2x\Llm\Agent;
 
-use Hameleon2x\Llm\Agent\Dto\Config;
+use Hameleon2x\Llm\Agent\Dto\RunOptions;
 use Hameleon2x\Llm\Agent\Dto\Result;
 use Hameleon2x\Llm\Agent\Enum\Event;
 use Hameleon2x\Llm\Agent\Enum\Finish;
@@ -64,7 +64,7 @@ class Runner
         array            $messages,
         ToolboxInterface $toolbox,
         callable         $systemPromptFn,
-        Config           $config,
+        RunOptions       $config,
         ?callable        $emit = null
     ): Result {
         // Приёмник событий — вспомогательный канал (прогресс в интерфейсе, запись в базу). Его сбой
@@ -394,7 +394,7 @@ class Runner
      * Копия исполнителя на этот прогон: переопределения из конфига плюс трансляция попыток
      * и переключений моделей в события цикла.
      */
-    private function prepareOrchestra(Config $config, AttemptObserver $observer): Orchestra
+    private function prepareOrchestra(RunOptions $config, AttemptObserver $observer): Orchestra
     {
         $orchestra = $this->orchestra;
 
@@ -415,7 +415,7 @@ class Runner
      * @param Message[]        $messages
      * @param ToolDefinition[] $tools
      */
-    private function buildRequest(string $systemPrompt, array $messages, array $tools, Config $config): Request
+    private function buildRequest(string $systemPrompt, array $messages, array $tools, RunOptions $config): Request
     {
         $withSystem = array_merge([Message::system($systemPrompt)], $messages);
 
@@ -436,15 +436,15 @@ class Runner
      * @param AttemptLog[] $attempts
      */
     private function finishOnToolLimit(
-        Orchestra $orchestra,
-        array     $messages,
-        callable  $systemPromptFn,
-        Config    $config,
-        ?string   $modelKey,
-        int       $turnsUsed,
-        Usage     $usage,
-        array     $attempts,
-        ?Response $lastResponse = null
+        Orchestra  $orchestra,
+        array      $messages,
+        callable   $systemPromptFn,
+        RunOptions $config,
+        ?string    $modelKey,
+        int        $turnsUsed,
+        Usage      $usage,
+        array      $attempts,
+        ?Response  $lastResponse = null
     ): Result {
         $toolCallsUsed = $config->maxToolCalls;
 
@@ -548,7 +548,7 @@ class Runner
     private function executeToolCalls(
         array            $toolCalls,
         ToolboxInterface $toolbox,
-        Config           $config,
+        RunOptions       $config,
         array            $paramNames,
         array            &$messages,
         int              &$toolCallsLeft,
@@ -656,7 +656,7 @@ class Runner
      * ключ: иначе пояснение либо потерялось бы, либо превратило список в объект со случайными
      * числовыми ключами.
      */
-    private function withFirstUseHint(array $result, string $toolName, ToolboxInterface $toolbox, Config $config): array
+    private function withFirstUseHint(array $result, string $toolName, ToolboxInterface $toolbox, RunOptions $config): array
     {
         $hint = trim($toolbox->firstUseHint($toolName));
         if ($hint === '') {
@@ -681,13 +681,13 @@ class Runner
      * @param Message[] $messages дополняется по ссылке
      */
     private function answerWithError(
-        ToolCall $toolCall,
-        Config   $config,
-        string   $message,
-        array    &$messages,
-        callable $emit,
-        bool     $guard = false,
-        bool     $exception = false
+        ToolCall   $toolCall,
+        RunOptions $config,
+        string     $message,
+        array      &$messages,
+        callable   $emit,
+        bool       $guard = false,
+        bool       $exception = false
     ): void {
         $content = self::encodeForModel(['error' => $message], $config->encodeFailedText);
 
@@ -716,7 +716,7 @@ class Runner
      * для разработчика и содержит внутренности, а история уходит провайдеру и повторяется на каждом
      * обороте. Разрешённое сообщение приводится к одной строке и обрезается.
      */
-    private function toolExceptionText(Throwable $e, Config $config): string
+    private function toolExceptionText(Throwable $e, RunOptions $config): string
     {
         if (!$config->exposeToolExceptions) {
             return $config->toolFailedText;
@@ -727,8 +727,8 @@ class Runner
             return $config->toolFailedText;
         }
 
-        if (mb_strlen($message) > Config::TOOL_EXCEPTION_MAX_LENGTH) {
-            $message = mb_substr($message, 0, Config::TOOL_EXCEPTION_MAX_LENGTH) . '…';
+        if (mb_strlen($message) > RunOptions::TOOL_EXCEPTION_MAX_LENGTH) {
+            $message = mb_substr($message, 0, RunOptions::TOOL_EXCEPTION_MAX_LENGTH) . '…';
         }
 
         return $config->toolFailedPrefix . $message;

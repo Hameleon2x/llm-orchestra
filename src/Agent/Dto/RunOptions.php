@@ -13,7 +13,7 @@ use Hameleon2x\Llm\Tool\ToolArgsGuard;
  * Модель задаётся ключом каталога. Цепочка фолбэка и политика ошибок по умолчанию берутся из
  * каталога — переопределять их здесь нужно редко.
  */
-final class Config
+final class RunOptions
 {
     /** Ключ модели каталога. null — модель каталога по умолчанию. */
     public ?string $model = null;

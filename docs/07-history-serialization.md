@@ -40,7 +40,7 @@ use Hameleon2x\Llm\Factory\MessageFactory;
 
 /** @var Orchestra $orchestra */
 /** @var \Hameleon2x\Llm\Agent\ToolboxInterface $toolbox */
-/** @var \Hameleon2x\Llm\Agent\Dto\Config $config */
+/** @var \Hameleon2x\Llm\Agent\Dto\RunOptions $config */
 
 // 1. Restore history sent from the frontend.
 $rawHistory = json_decode($_POST['history'] ?? '[]', true) ?: [];

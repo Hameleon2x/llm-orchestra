@@ -42,9 +42,9 @@
 Все поля публичные — задаются напрямую:
 
 ```php
-use Hameleon2x\Llm\Agent\Dto\Config;
+use Hameleon2x\Llm\Agent\Dto\RunOptions;
 
-$config = new Config();
+$config = new RunOptions();
 $config->model = 'glm-4.6';
 $config->maxTurns = 16;
 $config->maxToolCalls = 12;

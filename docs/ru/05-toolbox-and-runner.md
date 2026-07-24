@@ -20,7 +20,7 @@
 require __DIR__ . '/vendor/autoload.php';
 
 use Hameleon2x\Llm\Agent\AbstractToolbox;
-use Hameleon2x\Llm\Agent\Dto\Config;
+use Hameleon2x\Llm\Agent\Dto\RunOptions;
 use Hameleon2x\Llm\Agent\Runner;
 use Hameleon2x\Llm\Dto\Message;
 use Hameleon2x\Llm\Orchestra;
@@ -72,7 +72,7 @@ $orchestra = new Orchestra(Registry::fromArray([
 ]));
 
 // 4. Настройки прогона.
-$config = new Config();
+$config = new RunOptions();
 $config->model = 'mini';
 $config->maxTurns = 12;
 $config->maxToolCalls = 10;
