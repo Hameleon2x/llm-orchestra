@@ -43,6 +43,7 @@ $orchestra = new Orchestra($registry, $logger);
 - `priority` is gone: order comes from `fallback`.
 - `supportedModels` is gone: a model belongs to its provider.
 - If you store the model in your database, migrate the stored slugs to catalog keys: a model has no other names, and an unknown value falls back to the default model.
+- Config sections are now strict about typos: an unknown key in a model, provider or policy record, in generation params, or in run options (`RunOptions`) throws `LlmConfigException` while the catalog is built. Drop any stray keys the library used to ignore silently, or move arbitrary application data into `meta`.
 
 ### 2. Calls: the model is a key
 

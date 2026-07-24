@@ -159,7 +159,6 @@ final class Orchestra
             return Response::failed($e->info());
         }
 
-        $startPolicy = $this->policyOverride ?? $this->registry->policyFor($model);
         $chain = $this->fallbackOverride ?? $this->registry->fallbackChain();
         $maxSwitches = $this->maxSwitchesOverride ?? $this->registry->maxSwitches();
         $totalWait = $this->totalWaitOverride ?? $this->registry->maxTotalWaitSeconds();
@@ -183,7 +182,10 @@ final class Orchestra
 
             $error = $outcome;
 
-            if (!$startPolicy->shouldFallback($error)) {
+            // Эскалацию решает политика упавшей (текущей) модели — той же, по которой шли её повторы:
+            // повторы и переключение живут по одной политике. Так then=stop и stopOn конкретной модели
+            // цепочки работают, а не игнорируются в пользу политики стартовой модели.
+            if (!$policy->shouldFallback($error)) {
                 break;
             }
 

@@ -3,7 +3,7 @@
 namespace Hameleon2x\Llm\Agent\Dto;
 
 use Hameleon2x\Llm\Config\GenerationParams;
-use Hameleon2x\Llm\Exception\LlmConfigException;
+use Hameleon2x\Llm\Support\ConfigKeys;
 use Hameleon2x\Llm\Tool\ToolArgsGuard;
 
 /**
@@ -24,7 +24,11 @@ final class RunOptions
     /** Ключ модели каталога. null — модель каталога по умолчанию. */
     public ?string $model = null;
 
-    /** Продолжать прогон на той модели, которая ответила после переключения. */
+    /**
+     * Продолжать прогон на той модели, которая ответила после переключения. Липкость действует в
+     * пределах одного run(): после приостановки (suspend) и повторного запуска прогон снова стартует
+     * с запрошенной модели — состояние между вызовами не хранится.
+     */
     public bool $stickyFallback = true;
 
     /**
@@ -127,15 +131,9 @@ final class RunOptions
      */
     public static function fromArray(array $config): self
     {
-        $options = new self();
+        ConfigKeys::assertKnown($config, self::CONFIGURABLE, 'Опции прогона');
 
-        foreach (array_keys($config) as $key) {
-            if (!in_array((string)$key, self::CONFIGURABLE, true)) {
-                throw new LlmConfigException(
-                    "Опции прогона: неизвестный ключ «{$key}». Допустимы: " . implode(', ', self::CONFIGURABLE) . '.'
-                );
-            }
-        }
+        $options = new self();
 
         if (isset($config['model'])) {
             $options->model = (string)$config['model'];

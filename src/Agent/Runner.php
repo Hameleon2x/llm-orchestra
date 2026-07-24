@@ -89,6 +89,9 @@ class Runner
         $answeredModel = $options->model;
         $lastResponse = null;
 
+        // Наблюдатель переводит попытки Orchestra в события цикла. Инвариант: перед каждым обращением
+        // к модели (каждым execute()) вызывается $observer->reset(), иначе возврат к запрошенной модели
+        // на следующем обороте выглядел бы как ложное переключение (детали — в AttemptObserver).
         $observer = new AttemptObserver($emit);
         $orchestra = $this->prepareOrchestra($observer);
 

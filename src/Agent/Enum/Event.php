@@ -29,7 +29,8 @@ final class Event
 
     /**
      * Попытка вызова модели не удалась.
-     * content — категория ошибки; meta: model, provider, attempt, category, message,
+     * content — категория ошибки; meta: model, provider, attempt, max_attempts (сколько попыток
+     * всего разрешает политика — для «повтор 2 из 3»), category, message,
      * will_retry (будет ли повтор), delay (пауза перед повтором).
      */
     public const ATTEMPT_FAILED = 'attempt_failed';

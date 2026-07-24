@@ -82,7 +82,7 @@ The category determines both whether we retry the request with the same model an
 
 **Not retried, but handed over to the next model** (retrying the same one changes nothing, another one may well answer):
 
-- `MODEL_UNAVAILABLE` — no such model, retired, overloaded (404).
+- `MODEL_UNAVAILABLE` — no such model, retired, overloaded (404); also out of credits / billing limit (402).
 - `CONTEXT_LENGTH` — the request doesn't fit the context window.
 - `AUTH` — HTTP 401/403; another provider has its own key.
 

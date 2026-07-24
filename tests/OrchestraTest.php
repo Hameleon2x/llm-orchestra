@@ -90,6 +90,38 @@ test('then = stop отменяет переключение', static function ()
     assertSame(0, $second->calls());
 });
 
+test('на fallback-модели действует её политика: then = stop останавливает эскалацию', static function (): void {
+    // Старт m1 (политика fallback) падает → уходим на m2, у которой СВОЯ политика then=stop.
+    // Раньше решение об эскалации принималось по политике стартовой модели, и прогон ушёл бы на m3.
+    $m1 = new FakeChatClient([serverError()]);
+    $m2 = new FakeChatClient([serverError()]);
+    $m3 = new FakeChatClient([okBody('не должна отвечать')]);
+
+    $registry = Registry::fromArray([
+        'providers'     => [
+            'p1' => ['class' => OpenAiProvider::class, 'httpClient' => $m1],
+            'p2' => ['class' => OpenAiProvider::class, 'httpClient' => $m2],
+            'p3' => ['class' => OpenAiProvider::class, 'httpClient' => $m3],
+        ],
+        'models'        => [
+            'm1' => ['provider' => 'p1', 'name' => 's1'],
+            'm2' => ['provider' => 'p2', 'name' => 's2', 'policy' => ['retries' => 0, 'then' => 'stop']],
+            'm3' => ['provider' => 'p3', 'name' => 's3'],
+        ],
+        'defaultModel'  => 'm1',
+        'fallback'      => ['m1', 'm2', 'm3'],
+        'defaultPolicy' => ['retries' => 0, 'then' => 'fallback'],
+    ]);
+
+    $response = (new Orchestra($registry, null, new RecordingSleeper()))
+        ->execute(Request::simple('system', 'user'), 'm1');
+
+    assertFalse($response->isSuccess());
+    assertSame('m2', $response->error->modelKey, 'эскалация остановилась на модели с then=stop');
+    assertSame(1, $m2->calls());
+    assertSame(0, $m3->calls(), 'политика запасной модели прекратила перебор');
+});
+
 test('ошибка настройки не повторяется и не переключает модель', static function (): void {
     $first = new FakeChatClient([new TypeError('null passed to strlen()')]);
     $second = new FakeChatClient([okBody('не должна отвечать')]);

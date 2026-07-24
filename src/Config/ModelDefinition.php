@@ -3,6 +3,7 @@
 namespace Hameleon2x\Llm\Config;
 
 use Hameleon2x\Llm\Exception\LlmConfigException;
+use Hameleon2x\Llm\Support\ConfigKeys;
 
 /**
  * Модель в каталоге — единица выбора, настройки и политики. Имён у неё ровно два: ключ каталога
@@ -82,6 +83,12 @@ final class ModelDefinition
 
     public static function fromArray(string $key, array $config): self
     {
+        ConfigKeys::assertKnown(
+            $config,
+            ['provider', 'name', 'fullName', 'description', 'params', 'unsupported', 'extraParams', 'headers', 'capture', 'timeout', 'tags', 'meta', 'policy', 'pricing'],
+            "Модель «{$key}»"
+        );
+
         $definition = new self();
         $definition->key = $key;
 

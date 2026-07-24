@@ -2,6 +2,8 @@
 
 namespace Hameleon2x\Llm\Config;
 
+use Hameleon2x\Llm\Support\ConfigKeys;
+
 /**
  * Параметры генерации: то, что понимает любой провайдер и что имеет смысл задавать на каждом
  * уровне — в каталоге по умолчанию, у модели, у конкретного вызова.
@@ -32,6 +34,8 @@ final class GenerationParams
 
     public static function fromArray(array $config): self
     {
+        ConfigKeys::assertKnown($config, ['temperature', 'topP', 'maxTokens', 'seed'], 'Параметры генерации');
+
         $params = new self();
         $params->temperature = isset($config['temperature']) ? (float)$config['temperature'] : null;
         $params->topP = isset($config['topP']) ? (float)$config['topP'] : null;

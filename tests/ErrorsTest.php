@@ -36,6 +36,7 @@ test('статусы раскладываются по категориям', st
         401 => ErrorCategory::AUTH,
         403 => ErrorCategory::AUTH,
         404 => ErrorCategory::MODEL_UNAVAILABLE,
+        402 => ErrorCategory::MODEL_UNAVAILABLE,
         400 => ErrorCategory::BAD_REQUEST,
         500 => ErrorCategory::SERVER_ERROR,
         503 => ErrorCategory::SERVER_ERROR,
@@ -188,7 +189,7 @@ test('дополнительные поля ответа достаются ка
 test('сырой ответ доступен по пути, когда его просили сохранить', static function (): void {
     $client = new FakeChatClient([okBody('ответ')]);
     $registry = catalogOf($client, [
-        'models' => ['m' => ['provider' => 'p', 'name' => 'slug', 'keepRaw' => true]],
+        'providers' => ['p' => ['class' => OpenAiProvider::class, 'httpClient' => $client, 'keepRaw' => true]],
     ]);
 
     $response = (new \Hameleon2x\Llm\Orchestra($registry, null, new RecordingSleeper()))

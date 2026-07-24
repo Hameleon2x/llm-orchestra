@@ -5,6 +5,7 @@ namespace Hameleon2x\Llm\Config;
 use Hameleon2x\Llm\Error\ErrorCategory;
 use Hameleon2x\Llm\Error\ErrorInfo;
 use Hameleon2x\Llm\Exception\LlmConfigException;
+use Hameleon2x\Llm\Support\ConfigKeys;
 
 /**
  * Что делать со сбоем: сколько раз повторить ту же модель и передавать ли работу следующей
@@ -83,6 +84,12 @@ final class ErrorPolicy
      */
     public static function fromArray(array $config): self
     {
+        ConfigKeys::assertKnown(
+            $config,
+            ['retries', 'delay', 'backoff', 'maxDelay', 'then', 'perCategory', 'retryOn', 'stopOn', 'maxWaitSeconds'],
+            'Политика ошибок'
+        );
+
         $policy = new self();
 
         if (isset($config['retries'])) {

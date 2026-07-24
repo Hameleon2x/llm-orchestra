@@ -179,6 +179,13 @@ final class ErrorMapper
         if ($status === 404) {
             return ErrorCategory::MODEL_UNAVAILABLE;
         }
+        if ($status === 402) {
+            // 402 у шлюзов (OpenRouter/Requesty) — «кончились кредиты / достигнут лимит биллинга» на
+            // этом провайдере, а не ошибка запроса. Повторять ту же модель бессмысленно (кредиты сами
+            // не появятся), но увести работу на другую модель цепочки — ровно то, что нужно. Поэтому
+            // трактуем как недоступность модели: без повторов, с фолбэком.
+            return ErrorCategory::MODEL_UNAVAILABLE;
+        }
         if ($status >= 500) {
             return ErrorCategory::SERVER_ERROR;
         }

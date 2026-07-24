@@ -5,6 +5,7 @@ namespace Hameleon2x\Llm\Config;
 use Hameleon2x\Llm\Exception\LlmConfigException;
 use Hameleon2x\Llm\Http\ChatClientInterface;
 use Hameleon2x\Llm\Provider\ProviderInterface;
+use Hameleon2x\Llm\Support\ConfigKeys;
 
 /**
  * Провайдер как транспорт: куда стучаться, чем авторизоваться, сколько ждать. Про модели,
@@ -58,6 +59,12 @@ final class ProviderDefinition
 
     public static function fromArray(string $key, array $config): self
     {
+        ConfigKeys::assertKnown(
+            $config,
+            ['class', 'token', 'baseUrl', 'timeout', 'headers', 'extraParams', 'capture', 'debug', 'keepRaw', 'meta', 'policy', 'httpClient'],
+            "Провайдер «{$key}»"
+        );
+
         $definition = new self();
         $definition->key = $key;
 
