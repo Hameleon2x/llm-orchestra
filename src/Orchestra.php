@@ -272,6 +272,7 @@ final class Orchestra
                     microtime(true) - $attemptStartedAt,
                     $delayBefore
                 );
+                $log->maxAttempts = $policy->maxAttemptsFor(null);
                 $attempts[] = $log;
                 $this->notify($log);
 
@@ -291,6 +292,7 @@ final class Orchestra
                 microtime(true) - $attemptStartedAt,
                 $delayBefore
             );
+            $log->maxAttempts = $policy->maxAttemptsFor($error->category);
             $attempts[] = $log;
 
             $this->logger->warning('LLM attempt failed', [

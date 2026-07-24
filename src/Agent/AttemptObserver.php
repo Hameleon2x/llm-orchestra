@@ -55,13 +55,14 @@ final class AttemptObserver
         }
 
         ($this->emit)(Event::ATTEMPT_FAILED, $attempt->error->category, [
-            'model'      => $attempt->modelKey,
-            'provider'   => $attempt->providerKey,
-            'attempt'    => $attempt->attempt,
-            'category'   => $attempt->error->category,
-            'message'    => $attempt->error->message,
-            'will_retry' => $attempt->willRetry,
-            'delay'      => $attempt->nextDelay,
+            'model'        => $attempt->modelKey,
+            'provider'     => $attempt->providerKey,
+            'attempt'      => $attempt->attempt,
+            'max_attempts' => $attempt->maxAttempts,
+            'category'     => $attempt->error->category,
+            'message'      => $attempt->error->message,
+            'will_retry'   => $attempt->willRetry,
+            'delay'        => $attempt->nextDelay,
         ]);
     }
 }

@@ -61,6 +61,15 @@ Everything beyond `providers` and `models` is optional: the fallback chain, retr
 - `ext-curl`, `ext-json`, `ext-mbstring`
 - `psr/log` ^1.1 || ^2.0 || ^3.0
 
+## Tests
+
+The checks live in `tests/` and need nothing but the library itself:
+
+```bash
+php tests/run.php            # every suite
+php tests/run.php Runner     # only suites and cases matching the filter
+```
+
 ## Versioning
 
 - [CHANGELOG.md](CHANGELOG.md) — per-release notes.

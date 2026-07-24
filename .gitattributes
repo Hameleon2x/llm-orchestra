@@ -1,0 +1,4 @@
+# В дистрибутив composer'а не попадает то, что нужно только разработке.
+/tests            export-ignore
+/.gitattributes   export-ignore
+/.gitignore       export-ignore

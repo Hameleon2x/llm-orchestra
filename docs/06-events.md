@@ -55,7 +55,7 @@ A model call attempt failed. Fires both for intermediate failures (a retry follo
 
 - `$content` — the error category (`Error\ErrorCategory`).
 - `$meta['model']`, `$meta['provider']` — where the failure happened.
-- `$meta['attempt']` — attempt number for that model.
+- `$meta['attempt']` — attempt number for that model; `$meta['max_attempts']` — how many the policy allows in total (for "retry 2 of 3").
 - `$meta['category']`, `$meta['message']` — the category and the technical message.
 - `$meta['will_retry']` — whether a retry follows; `$meta['delay']` — in how many seconds.
 

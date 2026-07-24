@@ -138,6 +138,21 @@ final class ErrorPolicy
     }
 
     /**
+     * Сколько попыток одной моделью всего допускает политика: первая плюс повторы. Категория
+     * учитывается, потому что перекрыть `retries` можно именно по ней.
+     *
+     * @param string|null $category null — базовое значение, без переопределения по категории
+     */
+    public function maxAttemptsFor(?string $category): int
+    {
+        if ($category === null) {
+            return $this->retries + 1;
+        }
+
+        return (int)$this->valueFor($category, 'retries', $this->retries) + 1;
+    }
+
+    /**
      * Передавать ли работу следующей модели цепочки.
      */
     public function shouldFallback(ErrorInfo $error): bool

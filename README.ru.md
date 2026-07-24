@@ -61,6 +61,15 @@ echo $response->isSuccess() ? $response->content : $response->error->category;
 - `ext-curl`, `ext-json`, `ext-mbstring`
 - `psr/log` ^1.1 || ^2.0 || ^3.0
 
+## Тесты
+
+Проверки лежат в `tests/` и не требуют ничего, кроме самой библиотеки:
+
+```bash
+php tests/run.php            # все наборы
+php tests/run.php Цикл       # только наборы и проверки, где встречается «Цикл»
+```
+
 ## Версионирование
 
 - [CHANGELOG.ru.md](CHANGELOG.ru.md) — описания релизов.

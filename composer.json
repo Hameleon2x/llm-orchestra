@@ -39,5 +39,11 @@
             "Hameleon2x\\Llm\\": "src/"
         }
     },
+    "scripts": {
+        "test": "php tests/run.php"
+    },
+    "scripts-descriptions": {
+        "test": "Прогнать проверки библиотеки: php tests/run.php [фильтр]"
+    },
     "minimum-stability": "stable"
 }

@@ -55,7 +55,7 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 
 - `$content` — категория ошибки (`Error\ErrorCategory`).
 - `$meta['model']`, `$meta['provider']` — где произошёл сбой.
-- `$meta['attempt']` — номер попытки этой моделью.
+- `$meta['attempt']` — номер попытки этой моделью; `$meta['max_attempts']` — сколько их всего разрешает политика (для «повтор 2 из 3»).
 - `$meta['category']`, `$meta['message']` — категория и техническое сообщение.
 - `$meta['will_retry']` — будет ли повтор; `$meta['delay']` — через сколько секунд.
 

@@ -18,6 +18,12 @@ final class AttemptLog
     /** Номер попытки этой моделью, с единицы. */
     public int $attempt;
 
+    /**
+     * Сколько попыток этой моделью всего допускает политика — с учётом категории этой ошибки.
+     * Интерфейсу это нужно, чтобы писать «повтор 2 из 3», а не просто «повтор».
+     */
+    public int $maxAttempts = 1;
+
     public bool $success;
 
     /** Ошибка попытки; null при успехе. */
@@ -59,6 +65,7 @@ final class AttemptLog
             'model'       => $this->modelKey,
             'provider'    => $this->providerKey,
             'attempt'     => $this->attempt,
+            'maxAttempts' => $this->maxAttempts,
             'success'     => $this->success,
             'latency'     => round($this->latency, 3),
             'delayBefore' => $this->delayBefore,
