@@ -31,7 +31,7 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 - **`toolArgsGuard`** (`?ToolArgsGuard`, enabled) — a check of arguments for leaked call markup. `null` — don't check.
 - **`exposeToolExceptions`** (`bool`, `false`) — whether to show the model the message of an exception thrown by a tool (trimmed to 300 characters). By default the model sees a neutral text and the details go to the log.
 - **`limitNudgeMessage`** (`string`) — the message added to the history when `maxToolCalls` runs out.
-- **`limitFallbackText`** (`string`) — the answer if the model stayed silent after that message.
+- **`limitFallbackText`** (`string`) — the answer when the follow-up returns a turn with no text but with tool calls. An empty turn is an `empty_response` error, not a placeholder.
 - **`turnsExhaustedText`** (`string`) — the answer when `maxTurns` runs out.
 
 All fields are public — set them directly:
@@ -69,7 +69,7 @@ The counter decreases on every executed call across all turns. When it hits zero
 1. The remaining calls of that turn are closed with an error — the history stays valid (every call has an answer).
 2. `Message::user($config->limitNudgeMessage)` is added to the history.
 3. One more request is made **without** tools.
-4. A non-empty answer is returned as success, otherwise `limitFallbackText` is returned.
+4. A non-empty answer is returned as success. A turn with no text but with tool calls yields `limitFallbackText`; a completely empty turn is an `empty_response` error.
 
 The result is marked `Finish::TOOL_LIMIT`, and the nudge's token spend is included in `Result::$usage`. If that follow-up request itself fails, the run returns an error with a category and `Finish::ERROR` — no placeholder is substituted for it.
 
@@ -77,7 +77,7 @@ The result is marked `Finish::TOOL_LIMIT`, and the nudge's token spend is includ
 
 Checked before every turn. On expiry the run returns a `Result` with an error of category `deadline`, `finish = Finish::DEADLINE`, and the full history — accumulated tool results are not lost.
 
-The deadline also holds inside a turn: the remaining time is passed to the executor as the wait cap for that call, so retries and model switches cannot carry the run far past it. A request already in flight is still bounded only by `timeout`.
+The deadline also holds inside a turn: the remaining time is passed to the executor as the wait cap for that call, so retries and model switches cannot carry the run past it. The timeout of the next request cannot exceed what is left of the deadline either.
 
 ## `params` and `extraParams`
 

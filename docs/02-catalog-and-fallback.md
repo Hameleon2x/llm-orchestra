@@ -287,7 +287,7 @@ It is easy to end up with unpleasant arithmetic here: a 600-second timeout with 
 
 None of the caps is set by default: with the default 120 s timeout, 2 retries and 2 switches a single call takes about twenty minutes in the worst case, and an agent run takes hours. If you call this from a web request, set the caps explicitly.
 
-Both caps account for all the time spent, not just the pauses, and neither interrupts a request already in flight — that is the `timeout`'s job. So the actual duration may exceed a cap by the length of the last request.
+Both caps account for all the time spent, not just the pauses, but they work differently. The call cap also clamps the timeout of the next request: it can never exceed what is left of the budget, so a call does not outrun `maxTotalWaitSeconds`. The model cap is only checked before deciding on a retry, so a request already sent to the provider runs out its `timeout` — and the model's time may exceed `maxWaitSeconds` by the length of that request.
 
 Here is how it looks with `timeout = 180` and `retries = 2`:
 
@@ -343,7 +343,7 @@ $response->extra('reasoning');   // whatever was found at the first non-empty pa
 
 A value is a path or a list of paths; the first non-empty one wins. A list is needed when different gateways name the same field differently: the application reads `extra('reasoning')` and notices nothing when switching between providers.
 
-For OpenAI-compatible providers, the built-in map already covers `reasoning`, `annotations`, `refusal`, `citations`, `systemFingerprint`, and the upstream name. Config extends and overrides it.
+The built-in map can be overridden with your own path but not switched off: `null` in `capture` removes the key from the configuration while the built-in path stays. For OpenAI-compatible providers, the built-in map already covers `reasoning`, `annotations`, `refusal`, `citations`, `systemFingerprint`, and the upstream name. Config extends and overrides it.
 
 ## Config validation
 
@@ -353,7 +353,7 @@ The catalog is validated as a whole at build time: at least one provider and one
 
 ```php
 $registry->has('glm');                     // whether such a model exists
-$registry->normalize($fromForm, 'glm');    // coerce a value to a key, else use the fallback
+$registry->normalize($fromForm, 'glm');    // coerce to a key, else substitute the given model
 $registry->model('glm');                   // ModelDefinition; throws LlmConfigException if absent
 $registry->findModel('glm');               // same, but null instead of an exception
 $registry->labels();                       // ['glm' => 'GLM-4.6', ...] — for a picker
@@ -364,7 +364,7 @@ $registry->provider('requesty')->token;    // transport settings
 $registry->costOf('glm', 1000, 500);       // cost estimate from catalog pricing
 ```
 
-`normalize()` is especially handy where a value comes from outside — a form or a database: it replaces an unknown or empty value with the fallback, and coerces a known one to the canonical key.
+`normalize()` is especially handy where a value comes from outside — a form or a database: an unknown or empty value is replaced by the model named in the second argument (or by `defaultModel` if there is none), and a known one is coerced to its canonical key. This is unrelated to the fallback chain, which handles escalation on failure.
 
 ## See also
 

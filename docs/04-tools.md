@@ -43,7 +43,7 @@ final class TimeNowTool extends AbstractTool
 }
 ```
 
-Three methods, and the model can already tell the time. `AbstractTool` covers the rest of the contract's methods with sensible defaults.
+Four methods, and the model can already tell the time. `AbstractTool` covers the rest of the contract's methods with sensible defaults.
 
 ## Tool with arguments
 

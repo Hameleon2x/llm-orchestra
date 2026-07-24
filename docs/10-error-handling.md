@@ -6,7 +6,7 @@ The network drops, a provider answers with 429, a model stays silent. The librar
 
 ## Checking for an error
 
-A model call failure never leaves as an exception: both `Orchestra` and `Runner` return a result with the error inside. An exception from your own code — the system prompt, the tool registry, the event sink — is not caught, it is your control flow; an exception from a tool itself is caught and closes that call with an error. Success means the absence of an error:
+A model call failure never leaves as an exception: both `Orchestra` and `Runner` return a result with the error inside. An exception from your own code does not escape either: a failing tool closes its own call with an error and the run goes on, a failing system prompt or tool registry comes back as a result with category `config`, and a failing event sink is only logged. Success means the absence of an error:
 
 ```php
 $response = $orchestra->execute(Request::simple('Answer briefly.', 'What is PHP?'));
@@ -72,7 +72,7 @@ The category determines both whether we retry the request with the same model an
 
 **Retried with the same model, then handed over to the next one:**
 
-- `NETWORK` — dropped connection, DNS: any cURL error other than a timeout.
+- `NETWORK` — dropped connection, DNS: cURL errors other than a timeout and configuration errors (see `CONFIG`).
 - `TIMEOUT` — the request timeout expired (cURL 28, HTTP 408).
 - `EMPTY_RESPONSE` — a turn with no text and no tool calls.
 - `RATE_LIMIT` — HTTP 429.
@@ -91,7 +91,7 @@ The category determines both whether we retry the request with the same model an
 - `CONTENT_FILTER` — blocked by moderation.
 - `BAD_REQUEST` — HTTP 400/422.
 - `DEADLINE` — the run's deadline expired.
-- `CONFIG` — catalog error.
+- `CONFIG` — a catalog error, a malformed provider URL or certificate, a failure in the application code of the agent loop.
 
 The logic is simple: retry whatever might succeed on a second attempt; switch models when the problem is with a specific model or key; stop when the request itself is wrong.
 

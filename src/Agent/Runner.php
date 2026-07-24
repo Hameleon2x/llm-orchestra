@@ -82,9 +82,15 @@ class Runner
         $toolCallsLeft = $config->maxToolCalls;
         $attempts = [];
         $currentModel = $config->model;
+        // Кому уходит следующий запрос и кто ответил последним — разные вещи при stickyFallback = false.
+        $answeredModel = $config->model;
         $lastResponse = null;
 
-        $orchestra = $this->prepareOrchestra($config, $emit);
+        // Память наблюдателя о том, какая модель отвечала: обнуляется перед каждым
+        // обращением к модели, чтобы возврат к запрошенной модели на следующем обороте
+        // (stickyFallback = false) не выглядел как ещё одно переключение.
+        $seenModel = null;
+        $orchestra = $this->prepareOrchestra($config, $emit, $seenModel);
 
         // Возобновление прерванного хода: в истории мог остаться ассистентский ход с вызовами без
         // ответов — инструмент ждал внешнего ввода либо прогон оборвался посреди исполнения.
@@ -101,7 +107,7 @@ class Runner
                         $config->maxToolCalls - $toolCallsLeft,
                         $usage
                     ),
-                    $currentModel,
+                    $answeredModel,
                     $attempts,
                     $lastResponse
                 );
@@ -138,7 +144,7 @@ class Runner
                         $usage,
                         Finish::DEADLINE
                     ),
-                    $currentModel,
+                    $answeredModel,
                     $attempts,
                     $lastResponse
                 );
@@ -155,14 +161,16 @@ class Runner
                     $e,
                     $messages,
                     $usage,
-                    $turnsUsed,
+                    // Оборот не состоялся: модель на нём ещё не вызывали, как и в ветке дедлайна.
+                    $turn,
                     $toolCallsUsed,
-                    $currentModel,
+                    $answeredModel,
                     $attempts,
                     $lastResponse
                 );
             }
 
+            $seenModel = null;
             $request = $this->buildRequest($systemPrompt, $messages, $tools, $config);
             $response = $this->withinDeadline($orchestra, $config, $startedAt)->execute($request, $currentModel);
 
@@ -176,15 +184,20 @@ class Runner
             if (!$response->isSuccess()) {
                 return $this->finalize(
                     Result::error($response->error, $messages, $turnsUsed, $toolCallsUsed, $usage),
-                    $currentModel,
+                    $answeredModel,
                     $attempts,
                     $lastResponse
                 );
             }
 
             $lastResponse = $response;
-            if ($config->stickyFallback && $response->modelKey !== '') {
-                $currentModel = $response->modelKey;
+            if ($response->modelKey !== '') {
+                // Кто ответил — это факт прогона, он уходит в результат независимо от того,
+                // продолжаем мы на этой модели или возвращаемся к запрошенной.
+                $answeredModel = $response->modelKey;
+                if ($config->stickyFallback) {
+                    $currentModel = $response->modelKey;
+                }
             }
 
             if (!$response->hasToolCalls()) {
@@ -193,7 +206,7 @@ class Runner
 
                 return $this->finalize(
                     Result::success($content, $messages, $turnsUsed, $toolCallsUsed, $usage),
-                    $currentModel,
+                    $answeredModel,
                     $attempts,
                     $response
                 );
@@ -245,7 +258,7 @@ class Runner
                         $config->maxToolCalls - $toolCallsLeft,
                         $usage
                     ),
-                    $currentModel,
+                    $answeredModel,
                     $attempts,
                     $lastResponse
                 );
@@ -277,7 +290,7 @@ class Runner
                 $usage,
                 Finish::TURNS_EXHAUSTED
             ),
-            $currentModel,
+            $answeredModel,
             $attempts,
             $lastResponse
         );
@@ -367,7 +380,7 @@ class Runner
      * Копия исполнителя на этот прогон: переопределения из конфига плюс трансляция попыток
      * и переключений моделей в события цикла.
      */
-    private function prepareOrchestra(Config $config, callable $emit): Orchestra
+    private function prepareOrchestra(Config $config, callable $emit, ?string &$seenModel): Orchestra
     {
         $orchestra = $this->orchestra;
 
@@ -382,6 +395,7 @@ class Runner
         }
 
         $seenModel = null;
+
 
         return $orchestra->withObserver(static function (AttemptLog $attempt) use ($emit, &$seenModel): void {
             // Модель запоминаем до отправки события: иначе сбой приёмника заставил бы прислать
@@ -524,7 +538,7 @@ class Runner
                 $usage,
                 Finish::TOOL_LIMIT
             ),
-            $modelKey,
+            $response->modelKey !== '' ? $response->modelKey : $modelKey,
             $attempts,
             $response
         );
@@ -624,7 +638,11 @@ class Runner
             // Первый вызов инструмента в истории — кладём в его результат пояснение о том, как
             // читать поля ответа. Дописывается в хвост истории один раз за диалог, поэтому
             // системный префикс запроса остаётся стабильным.
-            if ($this->isFirstUse($toolName, $toolCall->id, $messages)) {
+            // Пояснение дописывается ключом, поэтому результат-список от него превратился бы в
+            // объект — и форма ответа одного инструмента менялась бы от вызова к вызову.
+            $isList = $resultArray === [] || array_keys($resultArray) === range(0, count($resultArray) - 1);
+
+            if (!$isList && $this->isFirstUse($toolName, $toolCall->id, $messages)) {
                 try {
                     $hint = trim($toolbox->firstUseHint($toolName));
                     if ($hint !== '') {

@@ -17,8 +17,11 @@ final class ErrorMapper
     /** Коды cURL, означающие срыв по времени. */
     private const CURL_TIMEOUT = [28];
 
-    /** Коды cURL, означающие проблему соединения. */
-    private const CURL_NETWORK = [5, 6, 7, 18, 35, 52, 55, 56, 92];
+    /**
+     * Коды cURL, которые означают неверную настройку, а не временный сбой: битый адрес, неизвестный
+     * протокол, проблема с сертификатами. Повторять их и перебирать модели бессмысленно.
+     */
+    private const CURL_CONFIG = [1, 3, 60, 77];
 
     /**
      * Маркеры в тексте ошибки. Порядок важен: более специфичные категории проверяются раньше.
@@ -53,8 +56,8 @@ final class ErrorMapper
     {
         if (in_array($errno, self::CURL_TIMEOUT, true)) {
             $category = ErrorCategory::TIMEOUT;
-        } elseif (in_array($errno, self::CURL_NETWORK, true)) {
-            $category = ErrorCategory::NETWORK;
+        } elseif (in_array($errno, self::CURL_CONFIG, true)) {
+            $category = ErrorCategory::CONFIG;
         } else {
             $category = ErrorCategory::NETWORK;
         }
@@ -189,7 +192,8 @@ final class ErrorMapper
     /**
      * Уточнять ли категорию по тексту. Для 4xx это нужно (400 приезжает на что угодно), а вот
      * 5xx и 429 сами по себе однозначны — текст «timeout» внутри 500 не должен превращать
-     * серверный сбой в таймаут.
+     * серверный сбой в таймаут. По той же причине слово «timeout» не переопределяет ни один
+     * ответ с кодом ошибки: пришедший статус говорит о запросе больше, чем формулировка.
      */
     private static function textOverridesStatus(int $status, string $byText): bool
     {

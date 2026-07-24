@@ -33,10 +33,12 @@ The entries, each with context as an associative array (PSR-3 style):
 
 Levels are assigned like this: `warning` — a failure that a second attempt may fix; `info` — a model change; `error` — the final failure of the request.
 
-The agent loop writes two more entries — they need a logger in the second constructor argument: `new Runner($orchestra, $logger)`.
+The agent loop writes four more entries — they need a logger in the second constructor argument: `new Runner($orchestra, $logger)`.
 
 - `error` **`LLM tool threw an exception`** — a tool threw; the call was closed with a neutral error and the run goes on. Context: `tool`, `message`, `exception`.
+- `error` **`LLM run aborted by application code`** — the system prompt or the tool registry threw; the run returns a `config` error with the history preserved. Context: `stage`, `message`, `exception`.
 - `warning` **`LLM event sink failed`** — the event sink threw; the run goes on. Context: `event`, `message`.
+- `warning` **`LLM first-use hint failed`** — the first-use note could not be obtained; the tool result itself is kept. Context: `tool`, `message`.
 
 The `category` key is a value from `Error\ErrorCategory`. It's convenient for building metrics from: how many timeouts, how much rate limiting, how often a fallback switch occurs.
 
