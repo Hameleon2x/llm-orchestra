@@ -36,10 +36,9 @@ Every `runOptions()` call returns a fresh object: options belong to a run and mu
 **Which model to use**
 
 - **`model`** (`?string`, default `null`) — the catalog model key. `null` — the catalog's default model.
-- **`fallback`** (`?string[]`, `null`) — the backup model chain for this run. `null` — the catalog's chain.
-- **`maxSwitches`** (`?int`, `null`) — how many switches to a backup model are allowed per model call, that is within a single loop turn rather than the whole run. `null` — the catalog value.
-- **`policy`** (`?ErrorPolicy`, `null`) — the retry policy for this run. `null` — the model's or the catalog's policy.
 - **`stickyFallback`** (`bool`, `true`) — after a switch, continue the run on the model that answered.
+
+The backup chain, the number of switches and the error policy are set by the catalog — a property of the installation, not of a run. A run that needs a different chain gets its own `Orchestra::withFallback()`/`withPolicy()` (see [02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
 
 **Run bounds**
 

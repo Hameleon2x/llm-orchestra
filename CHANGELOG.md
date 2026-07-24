@@ -36,7 +36,7 @@ The unit of choice is now the model, not the provider. Model catalog, one flat f
 - **The texts sent to the model are configurable:** `toolLimitReachedText`, `toolFailedText`, `toolFailedPrefix`, `encodeFailedText` and `firstUseResultKey` in `Agent\Dto\RunOptions` — these strings used to be hard-coded in `Runner`.
 - **`Event::ATTEMPT_FAILED` and `Event::MODEL_FALLBACK`** — a failed attempt (with "will retry" and the delay) and a model switch. The UI can show retries as they happen instead of reconstructing them afterwards.
 - **`Http\ChatClientInterface` accepts headers and a per-call timeout**, and a custom client is injected through the provider config (`httpClient` — an object or a factory) instead of subclassing the provider.
-- **`Agent\Dto\RunOptions::$maxSwitches`** — the switch limit for a single run (previously only the catalog set it).
+- **The escalation chain lives only in the catalog.** `fallback`, `maxSwitches` and the error policy describe the installation, not the task, so there are no run options for them: a run with a special chain gets its own `Orchestra::withFallback()`/`withPolicy()`.
 - **`Support\SleeperInterface`** — the pause between attempts, replaceable in tests and in web contexts.
 - **Debugging over PSR-3:** `'debug' => true` in the provider config logs the outgoing payload and the raw response at `debug` level (this used to be a constant inside `CurlChatClient`).
 

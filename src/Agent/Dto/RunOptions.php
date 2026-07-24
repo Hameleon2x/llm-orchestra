@@ -2,7 +2,6 @@
 
 namespace Hameleon2x\Llm\Agent\Dto;
 
-use Hameleon2x\Llm\Config\ErrorPolicy;
 use Hameleon2x\Llm\Config\GenerationParams;
 use Hameleon2x\Llm\Exception\LlmConfigException;
 use Hameleon2x\Llm\Tool\ToolArgsGuard;
@@ -16,29 +15,14 @@ use Hameleon2x\Llm\Tool\ToolArgsGuard;
  * каталога — `Registry::runOptions()` отдаёт готовый объект, который остаётся поправить под
  * конкретный запуск.
  *
- * Модель задаётся ключом каталога. Цепочка фолбэка и политика ошибок по умолчанию берутся из
- * каталога — переопределять их здесь нужно редко.
+ * Модель задаётся ключом каталога. Цепочка фолбэка, число переключений и политика ошибок —
+ * свойство каталога, а не прогона: прогону, которому нужна другая цепочка, передайте свой
+ * Orchestra::withFallback()/withPolicy().
  */
 final class RunOptions
 {
     /** Ключ модели каталога. null — модель каталога по умолчанию. */
     public ?string $model = null;
-
-    /**
-     * Цепочка фолбэка на этот прогон. null — цепочка каталога.
-     *
-     * @var string[]|null
-     */
-    public ?array $fallback = null;
-
-    /**
-     * Сколько переключений на запасную модель разрешено на одно обращение к модели: счёт идёт в
-     * пределах оборота цикла и начинается заново на следующем. null — значение каталога.
-     */
-    public ?int $maxSwitches = null;
-
-    /** Политика ошибок на этот прогон. null — политика модели или каталога. */
-    public ?ErrorPolicy $policy = null;
 
     /** Продолжать прогон на той модели, которая ответила после переключения. */
     public bool $stickyFallback = true;
@@ -127,7 +111,7 @@ final class RunOptions
 
     /** Ключи, которые можно задать конфигом. Остальные поля — только из кода. */
     private const CONFIGURABLE = [
-        'model', 'fallback', 'maxSwitches', 'policy', 'stickyFallback',
+        'model', 'stickyFallback',
         'maxTurns', 'maxToolCalls', 'deadlineSeconds',
         'params', 'extraParams', 'toolChoice', 'toolArgsGuard', 'exposeToolExceptions',
         'limitNudgeMessage', 'limitFallbackText', 'turnsExhaustedText',
@@ -155,15 +139,6 @@ final class RunOptions
 
         if (isset($config['model'])) {
             $options->model = (string)$config['model'];
-        }
-        if (isset($config['fallback']) && is_array($config['fallback'])) {
-            $options->fallback = array_values($config['fallback']);
-        }
-        if (isset($config['maxSwitches'])) {
-            $options->maxSwitches = max(0, (int)$config['maxSwitches']);
-        }
-        if (isset($config['policy']) && is_array($config['policy'])) {
-            $options->policy = ErrorPolicy::fromArray($config['policy']);
         }
         if (isset($config['stickyFallback'])) {
             $options->stickyFallback = (bool)$config['stickyFallback'];

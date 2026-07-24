@@ -90,7 +90,7 @@ class Runner
         $lastResponse = null;
 
         $observer = new AttemptObserver($emit);
-        $orchestra = $this->prepareOrchestra($options, $observer);
+        $orchestra = $this->prepareOrchestra($observer);
 
         // Возобновление прерванного хода: в истории мог остаться ассистентский ход с вызовами без
         // ответов — инструмент ждал внешнего ввода либо прогон оборвался посреди исполнения.
@@ -387,24 +387,15 @@ class Runner
     }
 
     /**
-     * Копия исполнителя на этот прогон: переопределения из конфига плюс трансляция попыток
+     * Копия исполнителя на этот прогон: та же цепочка и политика каталога плюс трансляция попыток
      * и переключений моделей в события цикла.
+     *
+     * Цепочку эскалации и политику ошибок задаёт каталог — это свойство установки, а не задачи.
+     * Прогону, которому нужна другая цепочка, передайте свой Orchestra::withFallback()/withPolicy().
      */
-    private function prepareOrchestra(RunOptions $options, AttemptObserver $observer): Orchestra
+    private function prepareOrchestra(AttemptObserver $observer): Orchestra
     {
-        $orchestra = $this->orchestra;
-
-        if ($options->policy !== null) {
-            $orchestra = $orchestra->withPolicy($options->policy);
-        }
-        if ($options->fallback !== null || $options->maxSwitches !== null) {
-            $orchestra = $orchestra->withFallback(
-                $options->fallback ?? $orchestra->registry()->fallbackChain(),
-                $options->maxSwitches
-            );
-        }
-
-        return $orchestra->withObserver($observer);
+        return $this->orchestra->withObserver($observer);
     }
 
     /**

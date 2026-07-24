@@ -208,7 +208,7 @@ The same section can be attached to a provider and to an individual model — th
 ],
 ```
 
-**A policy is not assembled from pieces: the closest one applies, and it applies in full.** The lookup order is: the run's policy (`RunOptions::$policy` or `Orchestra::withPolicy()`) → the model's `policy` → its provider's `policy` → the catalog's `defaultPolicy`. The first one found is used; the rest are not mixed in.
+**A policy is not assembled from pieces: the closest one applies, and it applies in full.** The lookup order is: the run's policy (`Orchestra::withPolicy()`) → the model's `policy` → its provider's `policy` → the catalog's `defaultPolicy`. The first one found is used; the rest are not mixed in.
 
 Two consequences follow.
 
