@@ -122,7 +122,10 @@ final class ErrorPolicy
      */
     public function shouldRetry(ErrorInfo $error, int $attempt): bool
     {
-        if ($attempt > $this->valueFor($error->category, 'retries', $this->retries)) {
+        // Приведение типа обязательно: perCategory — публичное свойство, и политику собирают не
+        // только через fromArray(). Нечисловая строка сравнивалась бы со счётчиком как строка, и
+        // условие выхода не срабатывало бы никогда.
+        if ($attempt > (int)$this->valueFor($error->category, 'retries', $this->retries)) {
             return false;
         }
 

@@ -28,6 +28,7 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 **Other**
 
 - **`toolArgsGuard`** (`?ToolArgsGuard`, enabled) — a check of arguments for leaked call markup. `null` — don't check.
+- **`exposeToolExceptions`** (`bool`, `false`) — whether to show the model the message of an exception thrown by a tool (trimmed to 300 characters). By default the model sees a neutral text and the details go to the log.
 - **`limitNudgeMessage`** (`string`) — the message added to the history when `maxToolCalls` runs out.
 - **`limitFallbackText`** (`string`) — the answer if the model stayed silent after that message.
 - **`turnsExhaustedText`** (`string`) — the answer when `maxTurns` runs out.
@@ -69,7 +70,7 @@ The counter decreases on every executed call across all turns. When it hits zero
 3. One more request is made **without** tools.
 4. A non-empty answer is returned as success, otherwise `limitFallbackText` is returned.
 
-The result is marked `Finish::TOOL_LIMIT`, and the nudge's token spend is included in `Result::$usage`.
+The result is marked `Finish::TOOL_LIMIT`, and the nudge's token spend is included in `Result::$usage`. If that follow-up request itself fails, the run returns an error with a category and `Finish::ERROR` — no placeholder is substituted for it.
 
 ## `deadlineSeconds`
 
@@ -129,6 +130,8 @@ $result->usage;          // tokens, cost, per-model breakdown
 $result->modelKey;       // the model that worked last
 $result->attempts;       // AttemptLog[] — attempts, retries, switches
 $result->lastResponse;   // ?Response — extra, raw, finishReason of the last turn
+$result->suspended;      // the run is paused, waiting for external input
+$result->pendingToolCallIds;  // ids of the calls whose results must be provided
 ```
 
 ## See also

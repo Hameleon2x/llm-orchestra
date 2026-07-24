@@ -27,10 +27,16 @@ $orchestra = new Orchestra(Registry::fromArray($config), $logger);
 - `warning` **`LLM total wait budget exhausted, ...`** — исчерпан общий бюджет вызова `maxTotalWaitSeconds`; окончание сообщения говорит, что именно прекращено, — `stopping retries` или `stopping model switches`. Контекст: `model`, `maxTotalWaitSeconds`.
 - `warning` **`LLM attempt observer failed`** — наблюдатель попыток (`withObserver()`) бросил исключение. Прогон продолжается: сбой канала прогресса не должен ломать вызов модели. Контекст: `model`, `message`.
 - `info` **`LLM switching to next model in fallback chain`** — работа передана следующей модели цепочки. Контекст: `from`, `to`, `category`.
+- `warning` **`LLM unknown model key, falling back to the default model`** — запрошенного ключа в каталоге нет, взята модель по умолчанию. Контекст: `requested`, `default`.
 - `error` **`LLM all attempts exhausted`** — повторы и переключения не помогли, запрос провалился. Контекст: `model`, `category`, `message`, `attempts`.
 - `debug` **`LLM request` / `LLM response`** — исходящий payload и сырой ответ; только при `'debug' => true` у провайдера. Контекст: `url`, `payload` и `status`, `body`.
 
 Уровни расставлены так: `warning` — сбой, который может пройти со второй попытки; `info` — смена модели; `error` — окончательный провал запроса.
+
+Агентский цикл пишет ещё две записи — им нужен логгер во втором аргументе конструктора: `new Runner($orchestra, $logger)`.
+
+- `error` **`LLM tool threw an exception`** — инструмент упал с исключением; вызов закрыт нейтральной ошибкой, прогон продолжается. Контекст: `tool`, `message`, `exception`.
+- `warning` **`LLM event sink failed`** — приёмник событий бросил исключение; прогон продолжается. Контекст: `event`, `message`.
 
 Ключ `category` — значение из `Error\ErrorCategory`. По нему удобно строить метрики: сколько таймаутов, сколько ограничений частоты, как часто срабатывает переключение на запасную модель.
 

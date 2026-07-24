@@ -120,6 +120,15 @@ final class Orchestra
     public function execute(Request $request, ?string $modelKey = null): Response
     {
         try {
+            // Неизвестный ключ не ошибка — он подменяется моделью каталога по умолчанию, но молча
+            // делать этого нельзя: в базе приложения мог остаться идентификатор, которого больше нет.
+            if ($modelKey !== null && $modelKey !== '' && !$this->registry->has($modelKey)) {
+                $this->logger->warning('LLM unknown model key, falling back to the default model', [
+                    'requested' => $modelKey,
+                    'default'   => $this->registry->defaultModelKey(),
+                ]);
+            }
+
             $model = $this->registry->model($this->registry->normalize($modelKey));
         } catch (LlmConfigException $e) {
             $response = Response::failed($e->info());

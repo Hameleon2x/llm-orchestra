@@ -172,7 +172,9 @@ Result::suspend();                                        // pause: the result w
 
 A tool error is not an exception. Return `Result::error()` with text that makes it clear to the model what to fix: it will see it on the next turn and will be able to ask again or call the tool differently.
 
-If an exception does escape `execute()`, the loop catches it and closes the call with an error carrying the exception message — the run survives, but that message is technical and not written for the model.
+If an exception does escape `execute()`, the loop catches it, closes the call with a neutral error and logs the details (`LLM tool threw an exception`). By default the exception message is not shown to the model: it is written for a developer, it can be huge and carry internals (a `PDOException` message holds the full SQL with parameter values) — and the history goes to the provider and is repeated on every following turn.
+
+If your tools throw exceptions that are meaningful to the model, set `$config->exposeToolExceptions = true`: the message reaches the model as a single line, trimmed to 300 characters.
 
 `Result::suspend()` stops the loop and waits for external input — for example, the user's answer to a clarifying question. Details: [13-human-in-the-loop.md](13-human-in-the-loop.md).
 

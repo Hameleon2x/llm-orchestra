@@ -6,7 +6,7 @@ The network drops, a provider answers with 429, a model stays silent. The librar
 
 ## Checking for an error
 
-Neither `Orchestra` nor `Runner` throws exceptions. Success means the absence of an error:
+A model call failure never leaves as an exception: both `Orchestra` and `Runner` return a result with the error inside. An exception from your own code — the system prompt, the tool registry, the event sink — is not caught, it is your control flow; an exception from a tool itself is caught and closes that call with an error. Success means the absence of an error:
 
 ```php
 $response = $orchestra->execute(Request::simple('Answer briefly.', 'What is PHP?'));

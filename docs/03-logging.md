@@ -27,10 +27,16 @@ The entries, each with context as an associative array (PSR-3 style):
 - `warning` **`LLM total wait budget exhausted, ...`** — the call's `maxTotalWaitSeconds` budget is spent; the tail of the message says what exactly stopped — `stopping retries` or `stopping model switches`. Context: `model`, `maxTotalWaitSeconds`.
 - `warning` **`LLM attempt observer failed`** — the attempt observer (`withObserver()`) threw. The run continues: a broken progress channel must not break the model call. Context: `model`, `message`.
 - `info` **`LLM switching to next model in fallback chain`** — work has been handed over to the next model in the chain. Context: `from`, `to`, `category`.
+- `warning` **`LLM unknown model key, falling back to the default model`** — the requested key is not in the catalog, the default model was used instead. Context: `requested`, `default`.
 - `error` **`LLM all attempts exhausted`** — retries and switches didn't help, the request failed. Context: `model`, `category`, `message`, `attempts`.
 - `debug` **`LLM request` / `LLM response`** — the outgoing payload and the raw response; only when the provider has `'debug' => true`. Context: `url`, `payload` and `status`, `body`.
 
 Levels are assigned like this: `warning` — a failure that a second attempt may fix; `info` — a model change; `error` — the final failure of the request.
+
+The agent loop writes two more entries — they need a logger in the second constructor argument: `new Runner($orchestra, $logger)`.
+
+- `error` **`LLM tool threw an exception`** — a tool threw; the call was closed with a neutral error and the run goes on. Context: `tool`, `message`, `exception`.
+- `warning` **`LLM event sink failed`** — the event sink threw; the run goes on. Context: `event`, `message`.
 
 The `category` key is a value from `Error\ErrorCategory`. It's convenient for building metrics from: how many timeouts, how much rate limiting, how often a fallback switch occurs.
 

@@ -345,7 +345,7 @@ For OpenAI-compatible providers, the built-in map already covers `reasoning`, `a
 
 ## Config validation
 
-The catalog is validated as a whole at build time: the provider a model references must exist; so must the keys in the chain; the provider class must exist and implement `ProviderInterface`. Any violation raises `LlmConfigException` with a clear message, before the first request.
+The catalog is validated as a whole at build time: at least one provider and one model must be defined; the provider a model references must exist; so must the keys in the chain and the default model; the provider class must exist and implement `ProviderInterface`. Any violation raises `LlmConfigException` with a clear message, before the first request.
 
 ## What the catalog can return
 

@@ -13,6 +13,8 @@ $runner->run($messages, $toolbox, $systemPromptFn, $config, $emit);
 
 A plain `callable`; `$event` is one of the constants on `Agent\Enum\Event`.
 
+An exception from the sink does not abort the run: the loop catches it and logs `LLM event sink failed`. By the time an event fires the tools have already run with their side effects, and a failed database write must not cost you the whole history.
+
 ## The events
 
 `Hameleon2x\Llm\Agent\Enum\Event`: three turn events plus two about model call failures.
@@ -45,6 +47,7 @@ Fires once per tool invocation: right after `execute()` returns, and for a call 
 - `$meta['tool']` — tool name.
 - `$meta['ok']` — `bool`, value of `Tool\Dto\Result::$ok`. Distinguishes tool errors (the tool ran but reported failure) from successes.
 - `$meta['guard']` — `true` when the call was rejected by the argument check and the tool never ran (see `Config::$toolArgsGuard`). A signal for the UI not to render a widget for a corrupted call.
+- `$meta['exception']` — `true` if the tool threw. Tells an internal failure apart from a `Result::error()` the tool returned on purpose.
 
 ### `Event::ATTEMPT_FAILED` — `'attempt_failed'`
 

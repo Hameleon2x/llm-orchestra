@@ -18,6 +18,8 @@ use Hameleon2x\Llm\Error\ErrorCategory;
 use Hameleon2x\Llm\Error\ErrorInfo;
 use Hameleon2x\Llm\Factory\ToolCallFactory;
 use Hameleon2x\Llm\Orchestra;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 use Throwable;
 
 /**
@@ -40,9 +42,12 @@ class Runner
 {
     private Orchestra $orchestra;
 
-    public function __construct(Orchestra $orchestra)
+    private LoggerInterface $logger;
+
+    public function __construct(Orchestra $orchestra, ?LoggerInterface $logger = null)
     {
         $this->orchestra = $orchestra;
+        $this->logger = $logger ?? new NullLogger();
     }
 
     /**
@@ -59,8 +64,10 @@ class Runner
         Config           $config,
         ?callable        $emit = null
     ): Result {
-        $emit = $emit ?? static function (): void {
-        };
+        // Приёмник событий — вспомогательный канал (прогресс в интерфейсе, запись в базу). Его сбой
+        // не должен обрывать прогон: инструменты уже отработали с побочными эффектами, а история
+        // живёт внутри run() и была бы потеряна. Так же изолирован наблюдатель попыток в Orchestra.
+        $emit = $this->safeEmit($emit);
 
         $startedAt = microtime(true);
         $tools = $toolbox->definitions();
@@ -105,7 +112,8 @@ class Runner
                     $currentModel,
                     0,
                     $usage,
-                    $attempts
+                    $attempts,
+                    $lastResponse
                 );
             }
         }
@@ -232,7 +240,8 @@ class Runner
                     $currentModel,
                     $turnsUsed,
                     $usage,
-                    $attempts
+                    $attempts,
+                    $lastResponse
                 );
             }
         }
@@ -255,6 +264,28 @@ class Runner
     }
 
     /**
+     * Обёртка приёмника событий, которая не пробрасывает исключения наружу.
+     */
+    private function safeEmit(?callable $emit): callable
+    {
+        if ($emit === null) {
+            return static function (): void {
+            };
+        }
+
+        return function (string $event, string $content, array $meta = []) use ($emit): void {
+            try {
+                $emit($event, $content, $meta);
+            } catch (Throwable $e) {
+                $this->logger->warning('LLM event sink failed', [
+                    'event'   => $event,
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        };
+    }
+
+    /**
      * Копия исполнителя на этот прогон: переопределения из конфига плюс трансляция попыток
      * и переключений моделей в события цикла.
      */
@@ -272,13 +303,17 @@ class Runner
         $seenModel = null;
 
         return $orchestra->withObserver(static function (AttemptLog $attempt) use ($emit, &$seenModel): void {
-            if ($seenModel !== null && $attempt->modelKey !== $seenModel) {
+            // Модель запоминаем до отправки события: иначе сбой приёмника заставил бы прислать
+            // одно и то же переключение ещё раз на следующей попытке.
+            $previousModel = $seenModel;
+            $seenModel = $attempt->modelKey;
+
+            if ($previousModel !== null && $attempt->modelKey !== $previousModel) {
                 $emit(Event::MODEL_FALLBACK, $attempt->modelKey, [
-                    'from' => $seenModel,
+                    'from' => $previousModel,
                     'to'   => $attempt->modelKey,
                 ]);
             }
-            $seenModel = $attempt->modelKey;
 
             if ($attempt->success || $attempt->error === null) {
                 return;
@@ -328,10 +363,14 @@ class Runner
         ?string   $modelKey,
         int       $turnsUsed,
         Usage     $usage,
-        array     $attempts
+        array     $attempts,
+        ?Response $lastResponse = null
     ): Result {
         $toolCallsUsed = $config->maxToolCalls;
 
+        // История без подталкивающего сообщения: если добивка не удастся, отдать её наружу нельзя —
+        // приложение сохранит историю, и в диалоге появится реплика пользователя, которой не было.
+        $messagesBeforeNudge = $messages;
         $messages[] = Message::user($config->limitNudgeMessage);
 
         $systemPrompt = (string)$systemPromptFn($messages);
@@ -352,10 +391,10 @@ class Runner
         // остаются в Result.
         if (!$response->isSuccess()) {
             return $this->finalize(
-                Result::error($response->error, $messages, $turnsUsed, $toolCallsUsed, $usage),
+                Result::error($response->error, $messagesBeforeNudge, $turnsUsed, $toolCallsUsed, $usage),
                 $modelKey,
                 $attempts,
-                null
+                $lastResponse
             );
         }
 
@@ -456,7 +495,24 @@ class Runner
                 // Сбой инструмента — не сбой прогона: закрываем вызов ошибкой, модель увидит её на
                 // следующем ходу. Иначе исключение прикладного кода оборвало бы весь цикл и ход
                 // остался бы без ответов на уже сделанные вызовы.
-                $this->answerWithError($toolCall, 'Ошибка инструмента: ' . $e->getMessage(), $messages, $emit);
+                //
+                // Модели уходит нейтральный текст: сообщение исключения пишут для разработчика, оно
+                // бывает огромным и содержит внутренности (SQL с параметрами, пути, персональные
+                // данные), а история отправляется провайдеру и повторяется на каждом обороте.
+                // Подробности — в лог.
+                $this->logger->error('LLM tool threw an exception', [
+                    'tool'      => $toolName,
+                    'message'   => $e->getMessage(),
+                    'exception' => get_class($e),
+                ]);
+                $this->answerWithError(
+                    $toolCall,
+                    $this->toolExceptionText($e, $config),
+                    $messages,
+                    $emit,
+                    false,
+                    true
+                );
                 continue;
             }
 
@@ -478,7 +534,7 @@ class Runner
                 }
             }
 
-            $content = json_encode($resultArray, JSON_UNESCAPED_UNICODE);
+            $content = self::encodeForModel($resultArray);
 
             $emit(Event::TOOL_RESULT, $content, [
                 'tool_call_id' => $toolCall->id,
@@ -502,9 +558,10 @@ class Runner
         string   $message,
         array    &$messages,
         callable $emit,
-        bool     $guard = false
+        bool     $guard = false,
+        bool     $exception = false
     ): void {
-        $content = json_encode(['error' => $message], JSON_UNESCAPED_UNICODE);
+        $content = self::encodeForModel(['error' => $message]);
 
         $meta = [
             'tool_call_id' => $toolCall->id,
@@ -514,9 +571,56 @@ class Runner
         if ($guard) {
             $meta['guard'] = true;
         }
+        if ($exception) {
+            // Интерфейсу и аудиту нужно отличать «инструмент сообщил о неудаче» от «инструмент упал»:
+            // в первом случае текст писал автор инструмента, во втором — это внутренний сбой.
+            $meta['exception'] = true;
+        }
 
         $emit(Event::TOOL_RESULT, $content, $meta);
         $messages[] = Message::tool($toolCall->id, $content);
+    }
+
+    /**
+     * Что увидит модель вместо результата упавшего инструмента.
+     *
+     * Сообщение исключения показывается, только если приложение это разрешило: обычно оно написано
+     * для разработчика и содержит внутренности, а история уходит провайдеру и повторяется на каждом
+     * обороте. Разрешённое сообщение приводится к одной строке и обрезается.
+     */
+    private function toolExceptionText(Throwable $e, Config $config): string
+    {
+        if (!$config->exposeToolExceptions) {
+            return 'Инструмент завершился внутренней ошибкой. Повторять вызов с теми же аргументами бессмысленно.';
+        }
+
+        $message = trim(preg_replace('/\s+/u', ' ', $e->getMessage()) ?? '');
+        if ($message === '') {
+            return 'Инструмент завершился внутренней ошибкой.';
+        }
+
+        if (mb_strlen($message) > Config::TOOL_EXCEPTION_MAX_LENGTH) {
+            $message = mb_substr($message, 0, Config::TOOL_EXCEPTION_MAX_LENGTH) . '…';
+        }
+
+        return 'Инструмент завершился ошибкой: ' . $message;
+    }
+
+    /**
+     * JSON для tool-сообщения. Битые последовательности заменяются, а не роняют кодирование:
+     * пустое tool-сообщение выглядело бы для модели как «инструмент ничего не ответил».
+     */
+    private static function encodeForModel(array $payload): string
+    {
+        $content = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($content === false) {
+            $content = json_encode(
+                ['error' => 'Результат инструмента не удалось сериализовать в JSON.'],
+                JSON_UNESCAPED_UNICODE
+            );
+        }
+
+        return (string)$content;
     }
 
     /**
