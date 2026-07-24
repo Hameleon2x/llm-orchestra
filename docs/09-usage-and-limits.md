@@ -74,16 +74,17 @@ $estimate = $registry->costOf('gpt-5', $usage->promptTokens, $usage->completionT
 
 ## Run limits
 
-Four limiters, each with its own purpose:
+Five limiters, each with its own purpose:
 
 - **`Config::$maxTurns`** — how many times the model can be called. On exhaustion the run returns `Finish::TURNS_EXHAUSTED` and the text `turnsExhaustedText` in `$content`.
 - **`Config::$maxToolCalls`** — how many tools can be executed. On exhaustion, one more request without tools is made so the model can sum up the collected data; the result is marked `Finish::TOOL_LIMIT`.
 - **`Config::$deadlineSeconds`** — the maximum run duration. Checked before every turn; on expiry an error of category `deadline` is returned along with the full history.
-- **`ErrorPolicy::$maxWaitSeconds`** — the total time you can wait on retries of a single call. On exhaustion retries stop and the last error is returned.
+- **`ErrorPolicy::$maxWaitSeconds`** — how long a single model may take: its requests and the pauses between retries. On exhaustion retries stop and the work goes to the next model in the chain, whose own countdown starts from scratch.
+- **`maxTotalWaitSeconds`** (a catalog key) — how long the whole call may take, including every switch. On exhaustion both retries and switches stop, and the last error is returned.
 
-The first three are set in the run config ([08-config-reference.md](08-config-reference.md)), the last one in the error policy ([02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
+The first three are set in the run config ([08-config-reference.md](08-config-reference.md)), the last two in the catalog and its error policy ([02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
 
-A useful rule: keep `maxTurns` noticeably higher than `maxToolCalls`. Then the call limit triggers first, and the run ends with a meaningful answer from the model rather than a service placeholder about exhausted turns.
+A useful rule: keep `maxTurns` higher than `maxToolCalls` — the defaults (`40` and `30`) follow it. Every turn with tool calls spends at least one unit of `maxToolCalls`, and a turn without calls ends the loop, so with that ratio the call limit triggers first: the run ends with a final answer from the model rather than a service placeholder about exhausted turns.
 
 ## Counters after a run
 

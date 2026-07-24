@@ -74,7 +74,7 @@ $orchestra = new Orchestra(Registry::fromArray([
 // 4. Run settings.
 $config = new Config();
 $config->model = 'mini';
-$config->maxTurns = 5;
+$config->maxTurns = 12;
 $config->maxToolCalls = 10;
 $config->params->temperature = 0.3;
 
@@ -104,7 +104,7 @@ The model will decide on its own that it needs `get_weather` to answer, call it,
 - **`$usage`** — tokens, cost, and a per-model breakdown, see [09-usage-and-limits.md](09-usage-and-limits.md).
 - **`$modelKey`** — which model worked last. Differs from the requested one if a switch to a fallback happened on failure.
 - **`$attempts`** — the log of model call attempts: retries and switches.
-- **`$lastResponse`** — the last model response in full: reasoning in `extra`, the raw payload in `raw`.
+- **`$lastResponse`** — the last model response in full: reasoning in `extra`, the raw response through `raw()`.
 - **`$suspended`, `$pendingToolCallIds`** — the run has paused and is waiting for external input, see [13-human-in-the-loop.md](13-human-in-the-loop.md).
 
 ## Toolbox
@@ -173,12 +173,12 @@ Two limits guard against endless work:
 
 What happens when they run out:
 
-- **`maxToolCalls` exhausted.** The remaining calls of this turn are closed with an error, the message `limitNudgeMessage` ("no more data is coming, give a final answer") is added to the history, and one more request is made — this time without tools. The model's answer becomes the result; if it stayed silent, `limitFallbackText` is returned. In both cases `$success` is `true` and `$finish` is `Finish::TOOL_LIMIT`.
+- **`maxToolCalls` exhausted.** The remaining calls of this turn are closed with an error, the message `limitNudgeMessage` ("no more data is coming, give a final answer") is added to the history, and one more request is made — this time without tools. The model's answer becomes the result; if it stayed silent, `limitFallbackText` is returned. This request goes beyond the turn budget and does not increase `turnsUsed`. In both cases `$success` is `true` and `$finish` is `Finish::TOOL_LIMIT`. If that request itself fails (network, context length, unavailability), the run returns an error with a category, just like on any turn — no placeholder is substituted for it.
 - **`maxTurns` exhausted.** `turnsExhaustedText` is appended to the history and also lands in `$content`. `$success` is `true`, `$finish` is `Finish::TURNS_EXHAUSTED`.
 
 Both cases are not an error but a normal completion within budget. `$finish` helps you tell them apart from a full answer.
 
-The third limiter is the deadline: `$config->deadlineSeconds`. It is checked before every turn, and on expiry the run returns an error of category `deadline` along with the full history: the tool results collected so far are not lost.
+The third limiter is the deadline: `$config->deadlineSeconds`. It is checked before every turn, and on expiry the run returns an error of category `deadline` along with the full history: the tool results collected so far are not lost. The check sits at the start of a turn, so finishing off unanswered calls on resume and the tool-limit follow-up request happen outside it.
 
 ## Hint on a tool's first call
 

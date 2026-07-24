@@ -81,6 +81,7 @@ What you can set:
 - **`debug`** — when `true`, the payload and the raw response are logged at `debug` level.
 - **`keepRaw`** — when `false`, the raw response is not stored in `Response`. Stored by default.
 - **`httpClient`** — a custom HTTP client, an object or a factory, see [11-custom-http-client.md](11-custom-http-client.md).
+- **`meta`** — any application data; the library never touches it.
 
 ## Model
 
@@ -91,7 +92,6 @@ What you can set:
     'fullName'    => 'GLM-4.6',
     'description' => 'fast, careful with tools',
     'params'      => ['temperature' => 0.2],
-    'aliases'     => ['zai/GLM-4.6'],
 ],
 ```
 
@@ -110,7 +110,6 @@ What you can set:
 - **`timeout`** — its own timeout in seconds; useful for slow reasoning models.
 - **`pricing`** — `['in' => 1.25, 'out' => 10.0]`, price per million tokens, for cost estimates.
 - **`tags`** — labels for grouping in your application, e.g. `['fast', 'tools']`.
-- **`aliases`** — additional identifiers the model can also be found by: useful if your database already stores slugs or names from an earlier scheme.
 - **`meta`** — arbitrary application data; the library doesn't touch it.
 
 ### One slug, two modes
@@ -185,7 +184,7 @@ There is exactly one retry level in the library — this one. The transport does
 - **`perCategory`** — overrides for individual error categories. A typical case is rate limiting: wait longer and more persistently.
 - **`retryOn`** — an explicit list of categories to retry. If empty, the category itself decides.
 - **`stopOn`** — categories for which we don't switch to a backup model, even if `then` allows it.
-- **`maxWaitSeconds`** — the cap on total waiting time for one call. Unlimited by default.
+- **`maxWaitSeconds`** — the cap on time spent on this model: its requests plus the pauses between retries. Unlimited by default.
 
 ### A policy of a model's own, and of a provider
 
@@ -273,15 +272,32 @@ The timeout of a single request is set on the provider and overridden by the mod
 
 The value goes to the transport as the timeout of the whole request; the connection timeout is taken as `min(30, timeout)`.
 
-It is easy to end up with unpleasant arithmetic here: a 600-second timeout with `retries = 2` means three attempts of almost ten minutes each, and only then a switch to the next model. So for slow models it makes sense to limit retries (`'policy' => ['retries' => 0]`) and to set an overall waiting cap:
+It is easy to end up with unpleasant arithmetic here: a 600-second timeout with `retries = 2` means three attempts of almost ten minutes each, and only then a switch to the next model. So besides the timeout of a single request there are two caps on time: per model and for the whole call.
 
 ```php
 'defaultPolicy' => [
-    'maxWaitSeconds' => 900,
+    'maxWaitSeconds' => 300,      // per model: its requests and the pauses between retries
 ],
+'maxTotalWaitSeconds' => 900,     // the whole call, including every switch
 ```
 
-`maxWaitSeconds` counts from the start of the call and stops both retries and switches to further models. It does not interrupt a request already in flight — that is the timeout's job — so the actual duration may exceed the cap by the length of the last request.
+**`maxWaitSeconds` is about a model**, which is why it lives in the policy: next to `retries`, `delay` and `backoff`, so it can be set on the model, on its provider or in `defaultPolicy`. It counts from that model's first attempt and **restarts after a switch**: if a slow starting model burned its five minutes, the backup gets its own five, not the remainder. When the budget runs out, retries stop and the work goes to the next model in the chain.
+
+**`maxTotalWaitSeconds` is about the whole call**, so it is a catalog key next to `fallback` and `maxSwitches`: it does not depend on which model is running. It counts from the start of the call; when it runs out, both retries and switches stop and the last error is returned.
+
+Both caps account for all the time spent, not just the pauses, and neither interrupts a request already in flight — that is the `timeout`'s job. So the actual duration may exceed a cap by the length of the last request.
+
+Here is how it looks with `timeout = 180` and `retries = 2`:
+
+```
+glm     attempt 1 → timeout (180 s)
+        pause 5 s
+glm     attempt 2 → timeout (180 s)      ← the model took 365 s, the 300 s budget is out
+                                           the retry is cancelled even though retries allowed it
+mimo    attempt 1 → timeout (180 s)      ← switch: mimo gets its own 300 s
+        pause 5 s
+mimo    attempt 2 → success ✓            ← ~730 s in total, the 900 s overall cap is untouched
+```
 
 ## The fallback chain
 
@@ -329,15 +345,15 @@ For OpenAI-compatible providers, the built-in map already covers `reasoning`, `a
 
 ## Config validation
 
-The catalog is validated as a whole at build time: the provider a model references must exist; so must the keys in the chain; aliases must be unique and must not clash with model keys; the provider class must exist and implement `ProviderInterface`. Any violation raises `LlmConfigException` with a clear message, before the first request.
+The catalog is validated as a whole at build time: the provider a model references must exist; so must the keys in the chain; the provider class must exist and implement `ProviderInterface`. Any violation raises `LlmConfigException` with a clear message, before the first request.
 
 ## What the catalog can return
 
 ```php
-$registry->has('glm');                     // whether such a model exists (key or alias)
+$registry->has('glm');                     // whether such a model exists
 $registry->normalize($fromForm, 'glm');    // coerce a value to a key, else use the fallback
 $registry->model('glm');                   // ModelDefinition; throws LlmConfigException if absent
-$registry->findModel('zai/GLM-4.6');       // same, but null instead of an exception
+$registry->findModel('glm');               // same, but null instead of an exception
 $registry->labels();                       // ['glm' => 'GLM-4.6', ...] — for a picker
 $registry->all();                          // all models
 $registry->byTag('fast');                  // models with a label

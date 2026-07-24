@@ -10,7 +10,7 @@
 composer require hameleon2x/llm-orchestra
 ```
 
-Требования: PHP 7.4+, `ext-curl`, `ext-json`, `psr/log`.
+Требования: PHP 7.4+, `ext-curl`, `ext-json`, `ext-mbstring`, `psr/log`.
 
 ## Каталог и исполнитель
 
@@ -39,11 +39,11 @@ $orchestra = new Orchestra($registry);
 
 Обязательного здесь ровно столько, сколько видно: провайдер знает, куда стучаться и чем авторизоваться, модель — через какого провайдера идти и под каким слагом её знает API. Всё остальное — параметры генерации, политика повторов, цепочка запасных моделей — необязательно и добавляется по мере надобности (см. [02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
 
-Каталог проверяется целиком при сборке: ссылка на несуществующего провайдера, опечатка в цепочке фолбэка или дублирующийся алиас поднимут `LlmConfigException` сразу, а не в момент сбоя в проде.
+Каталог проверяется целиком при сборке: ссылка на несуществующего провайдера или опечатка в цепочке фолбэка поднимут `LlmConfigException` сразу, а не в момент сбоя в проде.
 
 ## Отправка запроса
 
-`Request::simple($system, $user)` — самый короткий конструктор. Для произвольной истории — `Request::messages($messages)`, для вызова тулз — `Request::withTools(...)` (обычно через [`Agent\Runner`](05-toolbox-and-runner.md)).
+`Request::simple($system, $user)` — самый короткий конструктор. Для произвольной истории — `Request::messages($messages)`, для вызова инструментов — `Request::withTools(...)` (обычно через [`Agent\Runner`](05-toolbox-and-runner.md)).
 
 ```php
 <?php
@@ -124,10 +124,10 @@ $request = Request::simple($system, $user)
 $request->setExtraParams(['session_id' => 'run_42']);
 ```
 
-Стандартные поля (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`) через `extraParams` перезаписать нельзя — для них есть параметры генерации.
+Стандартные поля (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `stream`) через `extraParams` перезаписать нельзя — для них есть параметры генерации.
 
 ## Что дальше
 
 - [02-catalog-and-fallback.md](02-catalog-and-fallback.md) — каталог целиком: политика повторов, цепочка запасных моделей, режимы моделей.
 - [10-error-handling.md](10-error-handling.md) — категории ошибок и что с ними делать.
-- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — агентский цикл с тулзами.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — агентский цикл с инструментами.

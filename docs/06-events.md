@@ -2,7 +2,7 @@
 
 # Events
 
-`Runner::run()` accepts an optional `$emit` callback that fires at three points inside every iteration. Use it to drive a live chat UI or persist the dialog as it unfolds.
+`Runner::run()` accepts an optional `$emit` callback that fires at several points inside every iteration. Use it to drive a live chat UI or persist the dialog as it unfolds.
 
 ## Signature
 
@@ -38,9 +38,9 @@ Fires once per call the model requested, emitted up front when the assistant res
 
 ### `Event::TOOL_RESULT` — `'tool_result'`
 
-Fires once per tool invocation, right after `execute()` returns.
+Fires once per tool invocation: right after `execute()` returns, and for a call that did not complete (rejected by the argument check, cut off by the call limit, or thrown out of `execute()`) — at the moment the loop closes it with an error.
 
-- `$content` — `Result::toJsonArray()` encoded as JSON (`JSON_UNESCAPED_UNICODE`). For successes, the `data` payload; for errors, `{"error":"..."}`.
+- `$content` — `Result::toJsonArray()` encoded as JSON (`JSON_UNESCAPED_UNICODE`). For successes, the `data` payload; for errors, `{"error":"..."}`. On the tool's first use in the dialog the `firstUseHint()` note is added here under the `firstUseHintKey()` key.
 - `$meta['tool_call_id']` — same id as the matching `TOOL_CALL`.
 - `$meta['tool']` — tool name.
 - `$meta['ok']` — `bool`, value of `Tool\Dto\Result::$ok`. Distinguishes tool errors (the tool ran but reported failure) from successes.

@@ -42,18 +42,18 @@ use Hameleon2x\Llm\Factory\MessageFactory;
 /** @var \Hameleon2x\Llm\Agent\ToolboxInterface $toolbox */
 /** @var \Hameleon2x\Llm\Agent\Dto\Config $config */
 
-// 1. Restore history sent from the frontend.
+// 1. Восстанавливаем историю, пришедшую с фронта.
 $rawHistory = json_decode($_POST['history'] ?? '[]', true) ?: [];
 $messages   = array_map([MessageFactory::class, 'fromArray'], $rawHistory);
 
-// 2. Append the new user message.
+// 2. Добавляем новое сообщение пользователя.
 $messages[] = Message::user($_POST['text']);
 
-// 3. Run the agent.
+// 3. Прогоняем агентский цикл.
 $runner = new Runner($orchestra);
-$result = $runner->run($messages, $toolbox, fn() => 'You are a helpful assistant', $config);
+$result = $runner->run($messages, $toolbox, fn() => 'Ты полезный помощник.', $config);
 
-// 4. Send the new history back.
+// 4. Отдаём обновлённую историю обратно.
 echo json_encode([
     'answer'  => $result->content,
     'history' => array_map([MessageFactory::class, 'toArray'], $result->messages),
@@ -62,9 +62,9 @@ echo json_encode([
 
 Фронт сохраняет `response.history` в скрытое поле (или в `localStorage`) и присылает обратно без изменений со следующим сообщением.
 
-## Сериализация отдельных вызовов тулз
+## Сериализация отдельных вызовов инструментов
 
-Вызовы тулз ассистента лежат как простой массив внутри `tool_calls`. Чтобы работать с одним вызовом как с объектом — например, отрисовать его в UI — используйте [`ToolCallFactory`](../../src/Factory/ToolCallFactory.php):
+Вызовы инструментов ассистента лежат как простой массив внутри `tool_calls`. Чтобы работать с одним вызовом как с объектом — например, отрисовать его в UI — используйте [`ToolCallFactory`](../../src/Factory/ToolCallFactory.php):
 
 ```php
 use Hameleon2x\Llm\Factory\ToolCallFactory;
@@ -73,16 +73,16 @@ $array  = ToolCallFactory::toArray($toolCallObject);
 $object = ToolCallFactory::fromArray($array);
 ```
 
-`ToolCall::getArguments()` декодирует JSON-строку `arguments` в ассоциативный массив — удобно, когда вы сохраняете вызовы тулз для аналитики.
+`ToolCall::getArguments()` декодирует JSON-строку `arguments` в ассоциативный массив — удобно, когда вы сохраняете вызовы инструментов для аналитики.
 
-## Сериализация определений тулз
+## Сериализация определений инструментов
 
-Если вы передаёте определения тулз по сети (например, воркеру, который зовёт `Orchestra::execute()` напрямую), используйте [`ToolDefinitionFactory::toArray()`](../../src/Factory/ToolDefinitionFactory.php): `$payload = array_map([ToolDefinitionFactory::class, 'toArray'], $tools);`. `fromArray()` нет — определения тулз создаются вашими реализациями `ToolInterface`, а не восстанавливаются из недоверенного ввода. Собирайте их на стороне сервера.
+Если вы передаёте определения инструментов по сети (например, воркеру, который зовёт `Orchestra::execute()` напрямую), используйте [`ToolDefinitionFactory::toArray()`](../../src/Factory/ToolDefinitionFactory.php): `$payload = array_map([ToolDefinitionFactory::class, 'toArray'], $tools);`. `fromArray()` нет — определения создаются вашими реализациями `ToolInterface`, а не восстанавливаются из недоверенного ввода. Собирайте их на стороне сервера.
 
 Примечания: не включайте системное сообщение в передаваемую историю — `Runner` пересобирает его каждый ход через callable `$systemPromptFn`. Формат намеренно OpenAI-совместимый: тот же массив можно отправить любому OpenAI-совместимому API.
 
 ## См. также
 
-- [docs/05-toolbox-and-runner.md](05-toolbox-and-runner.md) — как `Runner` потребляет и обновляет историю.
-- [docs/08-config-reference.md](08-config-reference.md) — runtime-параметры, которым не место в передаваемой истории.
-- [docs/architecture.md](architecture.md) — где `MessageFactory` находится в стеке.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — как `Runner` читает и обновляет историю.
+- [08-config-reference.md](08-config-reference.md) — параметры прогона, которым не место в передаваемой истории.
+- [architecture.md](architecture.md) — где `MessageFactory` находится в стеке.

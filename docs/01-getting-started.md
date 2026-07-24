@@ -10,7 +10,7 @@ The shortest path from `composer require` to a working LLM call.
 composer require hameleon2x/llm-orchestra
 ```
 
-Requirements: PHP 7.4+, `ext-curl`, `ext-json`, `psr/log`.
+Requirements: PHP 7.4+, `ext-curl`, `ext-json`, `ext-mbstring`, `psr/log`.
 
 ## Catalog and executor
 
@@ -39,7 +39,7 @@ $orchestra = new Orchestra($registry);
 
 There is exactly as much required here as you see: a provider knows where to call and how to authenticate, a model knows which provider to go through and the slug the API knows it by. Everything else — generation parameters, retry policy, fallback chain — is optional and gets added as needed (see [02-catalog-and-fallback.md](02-catalog-and-fallback.md)).
 
-The catalog is validated as a whole at build time: a reference to a nonexistent provider, a typo in the fallback chain, or a duplicate alias raises `LlmConfigException` immediately, not at the moment of a production failure.
+The catalog is validated as a whole at build time: a reference to a nonexistent provider or a typo in the fallback chain raises `LlmConfigException` immediately, not at the moment of a production failure.
 
 ## Sending a request
 
@@ -124,7 +124,7 @@ Anything without a dedicated parameter is set as extra payload fields — at the
 $request->setExtraParams(['session_id' => 'run_42']);
 ```
 
-Standard fields (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`) cannot be overwritten through `extraParams` — use the generation parameters for those.
+Standard fields (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `stream`) cannot be overwritten through `extraParams` — use the generation parameters for those.
 
 ## Next
 

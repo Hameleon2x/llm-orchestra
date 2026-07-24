@@ -15,7 +15,7 @@
 
 **Границы прогона**
 
-- **`maxTurns`** (`int`, `10`) — сколько раз можно обратиться к модели. Один оборот — один запрос.
+- **`maxTurns`** (`int`, `40`) — сколько раз можно обратиться к модели. Один оборот — один запрос.
 - **`maxToolCalls`** (`int`, `30`) — сколько инструментов можно исполнить за весь прогон, а не за оборот.
 - **`deadlineSeconds`** (`?float`, `null`) — предельная длительность прогона в секундах.
 
@@ -39,7 +39,7 @@ use Hameleon2x\Llm\Agent\Dto\Config;
 
 $config = new Config();
 $config->model = 'glm-4.6';
-$config->maxTurns = 6;
+$config->maxTurns = 16;
 $config->maxToolCalls = 12;
 $config->params->temperature = 0.2;
 $config->params->maxTokens = 8000;
@@ -47,7 +47,7 @@ $config->params->maxTokens = 8000;
 
 ## `model` и переключение
 
-Ключ резолвится каталогом, поэтому подойдёт и любой из алиасов модели. При сбое исполнитель повторяет вызов, а затем переходит к следующей модели цепочки; со `stickyFallback = true` оставшиеся обороты идут уже на ответившей модели — возвращаться к упавшей смысла нет.
+Ключ ищется в каталоге. При сбое исполнитель повторяет вызов, а затем переходит к следующей модели цепочки; со `stickyFallback = true` оставшиеся обороты идут уже на ответившей модели — возвращаться к упавшей смысла нет.
 
 ## `maxTurns` — что такое оборот
 
@@ -85,7 +85,7 @@ $config->extraParams = [
 ];
 ```
 
-Стандартные поля (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`) через `extraParams` не переопределяются.
+Стандартные поля (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `stream`) через `extraParams` не переопределяются.
 
 Плагины OpenRouter — частный случай дополнительных полей:
 

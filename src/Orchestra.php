@@ -115,19 +115,23 @@ final class Orchestra
     /**
      * Выполнить запрос.
      *
-     * @param string|null $modelKey ключ или алиас модели каталога; null — модель каталога по умолчанию
+     * @param string|null $modelKey ключ модели каталога; null — модель каталога по умолчанию
      */
     public function execute(Request $request, ?string $modelKey = null): Response
     {
         try {
             $model = $this->registry->model($this->registry->normalize($modelKey));
         } catch (LlmConfigException $e) {
-            return Response::failed($e->info());
+            $response = Response::failed($e->info());
+            $response->metadata['attempts'] = 0;
+
+            return $response;
         }
 
         $rootPolicy = $this->policyOverride ?? $this->registry->policyFor($model);
         $chain = $this->fallbackOverride ?? $this->registry->fallbackChain();
         $maxSwitches = $this->maxSwitchesOverride ?? $this->registry->maxSwitches();
+        $totalWait = $this->registry->maxTotalWaitSeconds();
 
         $attempts = [];
         $attempted = [];
@@ -139,7 +143,7 @@ final class Orchestra
             $attempted[$model->key] = true;
             $policy = $this->policyOverride ?? $this->registry->policyFor($model);
 
-            $outcome = $this->runModel($request, $model, $policy, $attempts, $startedAt);
+            $outcome = $this->runModel($request, $model, $policy, $attempts, $startedAt, $totalWait);
             if ($outcome instanceof Response) {
                 $outcome->attempts = $attempts;
                 $outcome->metadata['attempts'] = count($attempts);
@@ -158,12 +162,13 @@ final class Orchestra
                 break;
             }
 
-            // Бюджет ожидания ограничивает и переключения: иначе цепочка продолжала бы перебор
-            // уже после того, как отведённое на вызов время вышло.
-            if ($this->budgetExceeded($rootPolicy, $startedAt, 0.0)) {
-                $this->logger->warning('LLM wait budget exhausted, stopping model switches', [
-                    'model'          => $model->key,
-                    'maxWaitSeconds' => $rootPolicy->maxWaitSeconds,
+            // Общий бюджет ограничивает и переключения: иначе цепочка продолжала бы перебор уже
+            // после того, как отведённое на вызов время вышло. Бюджет модели здесь ни при чём —
+            // у следующей модели свой отсчёт.
+            if ($this->waitExceeded($totalWait, $startedAt, 0.0)) {
+                $this->logger->warning('LLM total wait budget exhausted, stopping model switches', [
+                    'model'               => $model->key,
+                    'maxTotalWaitSeconds' => $totalWait,
                 ]);
                 break;
             }
@@ -196,7 +201,9 @@ final class Orchestra
     /**
      * Попытки одной моделью: успех возвращается как Response, исчерпанные повторы — как ErrorInfo.
      *
-     * @param AttemptLog[] $attempts журнал попыток, дополняется по ссылке
+     * @param AttemptLog[] $attempts   журнал попыток, дополняется по ссылке
+     * @param float        $startedAt  начало всего вызова — по нему считается общий бюджет
+     * @param float|null   $totalWait  общий бюджет вызова, секунды
      * @return Response|ErrorInfo
      */
     private function runModel(
@@ -204,11 +211,14 @@ final class Orchestra
         ModelDefinition $model,
         ErrorPolicy     $policy,
         array           &$attempts,
-        float           $startedAt
+        float           $startedAt,
+        ?float          $totalWait
     ) {
         $attempt = 0;
         $delayBefore = 0.0;
         $error = null;
+        // Бюджет модели считается с её первой попытки: после переключения отсчёт начинается заново.
+        $modelStartedAt = microtime(true);
 
         while (true) {
             $attempt++;
@@ -266,10 +276,21 @@ final class Orchestra
             $retry = $policy->shouldRetry($error, $attempt);
             $delay = $retry ? $policy->delayFor($error->category, $attempt) : 0.0;
 
-            if ($retry && $this->budgetExceeded($policy, $startedAt, $delay)) {
-                $this->logger->warning('LLM wait budget exhausted, stopping retries', [
+            // Два потолка: сколько эта модель уже занимает и сколько идёт весь вызов. Первый
+            // отдаёт работу следующей модели, второй прекращает вызов целиком.
+            if ($retry && $this->waitExceeded($policy->maxWaitSeconds, $modelStartedAt, $delay)) {
+                $this->logger->warning('LLM model wait budget exhausted, stopping retries', [
                     'model'          => $model->key,
                     'maxWaitSeconds' => $policy->maxWaitSeconds,
+                ]);
+                $retry = false;
+                $delay = 0.0;
+            }
+
+            if ($retry && $this->waitExceeded($totalWait, $startedAt, $delay)) {
+                $this->logger->warning('LLM total wait budget exhausted, stopping retries', [
+                    'model'               => $model->key,
+                    'maxTotalWaitSeconds' => $totalWait,
                 ]);
                 $retry = false;
                 $delay = 0.0;
@@ -297,11 +318,13 @@ final class Orchestra
     private function nextModel(array $chain, array $attempted): ?ModelDefinition
     {
         foreach ($chain as $key) {
+            $key = (string)$key;
             if (isset($attempted[$key])) {
                 continue;
             }
-            $model = $this->registry->findModel((string)$key);
-            if ($model !== null && !isset($attempted[$model->key])) {
+
+            $model = $this->registry->findModel($key);
+            if ($model !== null) {
                 return $model;
             }
         }
@@ -310,15 +333,17 @@ final class Orchestra
     }
 
     /**
-     * Выйдет ли пауза за отведённый на вызов бюджет времени.
+     * Выйдет ли пауза за отведённый бюджет времени, отсчитываемый от $since.
+     *
+     * @param float|null $budget потолок в секундах; null — без потолка
      */
-    private function budgetExceeded(ErrorPolicy $policy, float $startedAt, float $delay): bool
+    private function waitExceeded(?float $budget, float $since, float $delay): bool
     {
-        if ($policy->maxWaitSeconds === null) {
+        if ($budget === null) {
             return false;
         }
 
-        return (microtime(true) - $startedAt) + $delay > $policy->maxWaitSeconds;
+        return (microtime(true) - $since) + $delay > $budget;
     }
 
     /**
@@ -337,12 +362,24 @@ final class Orchestra
         return $this->providers[$key] = new $class($definition, $this->logger);
     }
 
+    /**
+     * Сообщить наблюдателю о попытке. Наблюдатель — вспомогательный канал (прогресс в интерфейсе,
+     * запись в базу), поэтому его сбой не должен превращать удачный ответ в ошибку и не должен
+     * пробиваться наружу вопреки контракту «ничего не бросаем».
+     */
     private function notify(AttemptLog $attempt): void
     {
         if ($this->observer === null) {
             return;
         }
 
-        ($this->observer)($attempt);
+        try {
+            ($this->observer)($attempt);
+        } catch (Throwable $e) {
+            $this->logger->warning('LLM attempt observer failed', [
+                'model'   => $attempt->modelKey,
+                'message' => $e->getMessage(),
+            ]);
+        }
     }
 }

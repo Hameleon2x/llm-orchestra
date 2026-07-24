@@ -37,7 +37,9 @@ final class ErrorPolicy
 
     /**
      * Переопределения по категориям: `[ErrorCategory::RATE_LIMIT => ['retries' => 3, 'delay' => 15]]`.
-     * Ключи те же, что у полей выше. Действуют только на ту категорию, в которой заданы.
+     * Действуют только на ту категорию, в которой заданы, и только на счётные поля: `retries`,
+     * `delay`, `backoff`, `maxDelay`. Решение «переключаться или остановиться» категорией не
+     * настраивается — для него есть `then` и `stopOn`.
      *
      * @var array<string, array>
      */
@@ -58,10 +60,16 @@ final class ErrorPolicy
     public array $stopOn = [];
 
     /**
-     * Потолок суммарного времени на один вызов, секунды: по его исчерпании прекращаются и повторы,
-     * и переключения на следующие модели цепочки. Уже идущий HTTP-запрос он не прерывает — это дело
-     * таймаута провайдера или модели, — поэтому фактическая длительность может превысить потолок на
-     * время последнего запроса. null — без потолка.
+     * Потолок времени на одну модель, секунды: запросы к ней плюс паузы между повторами. По его
+     * исчерпании повторы этой моделью прекращаются и работа уходит следующей модели цепочки —
+     * у неё отсчёт начинается заново.
+     *
+     * Уже идущий HTTP-запрос потолок не прерывает — это дело таймаута провайдера или модели, —
+     * поэтому фактическое время модели может превысить его на длительность последнего запроса.
+     * null — без потолка.
+     *
+     * Ограничение на весь вызов целиком, со всеми переключениями, задаётся отдельно:
+     * `maxTotalWaitSeconds` каталога.
      */
     public ?float $maxWaitSeconds = null;
 
@@ -92,7 +100,7 @@ final class ErrorPolicy
             $policy->then = (string)$config['then'] === self::THEN_STOP ? self::THEN_STOP : self::THEN_FALLBACK;
         }
         if (isset($config['perCategory']) && is_array($config['perCategory'])) {
-            $policy->perCategory = $config['perCategory'];
+            $policy->perCategory = self::normalizePerCategory($config['perCategory']);
         }
         if (isset($config['retryOn']) && is_array($config['retryOn'])) {
             $policy->retryOn = $config['retryOn'];
@@ -150,6 +158,45 @@ final class ErrorPolicy
         $maxDelay = (float)$this->valueFor($category, 'maxDelay', $this->maxDelay);
 
         return min($delay * ($backoff ** max(0, $attempt - 1)), $maxDelay);
+    }
+
+    /**
+     * Привести переопределения по категориям к тем же типам и границам, что и поля политики.
+     * Иначе опечатка в конфиге (`'retries' => 'много'`) сравнивалась бы со счётчиком попыток как
+     * строка и повторы стали бы бесконечными.
+     *
+     * @param array<string, mixed> $perCategory
+     * @return array<string, array>
+     */
+    private static function normalizePerCategory(array $perCategory): array
+    {
+        $normalized = [];
+
+        foreach ($perCategory as $category => $overrides) {
+            if (!is_array($overrides)) {
+                continue;
+            }
+
+            $clean = [];
+            if (isset($overrides['retries'])) {
+                $clean['retries'] = max(0, (int)$overrides['retries']);
+            }
+            if (isset($overrides['delay'])) {
+                $clean['delay'] = max(0.0, (float)$overrides['delay']);
+            }
+            if (isset($overrides['backoff'])) {
+                $clean['backoff'] = max(1.0, (float)$overrides['backoff']);
+            }
+            if (isset($overrides['maxDelay'])) {
+                $clean['maxDelay'] = max(0.0, (float)$overrides['maxDelay']);
+            }
+
+            if ($clean !== []) {
+                $normalized[(string)$category] = $clean;
+            }
+        }
+
+        return $normalized;
     }
 
     /**

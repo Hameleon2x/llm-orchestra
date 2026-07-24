@@ -15,7 +15,7 @@ A full walkthrough of [`Agent\Dto\Config`](../src/Agent/Dto/Config.php) — the 
 
 **Run bounds**
 
-- **`maxTurns`** (`int`, `10`) — how many times the model can be called. One turn is one request.
+- **`maxTurns`** (`int`, `40`) — how many times the model can be called. One turn is one request.
 - **`maxToolCalls`** (`int`, `30`) — how many tools can be executed over the whole run, not per turn.
 - **`deadlineSeconds`** (`?float`, `null`) — the maximum run duration in seconds.
 
@@ -39,7 +39,7 @@ use Hameleon2x\Llm\Agent\Dto\Config;
 
 $config = new Config();
 $config->model = 'glm-4.6';
-$config->maxTurns = 6;
+$config->maxTurns = 16;
 $config->maxToolCalls = 12;
 $config->params->temperature = 0.2;
 $config->params->maxTokens = 8000;
@@ -47,7 +47,7 @@ $config->params->maxTokens = 8000;
 
 ## `model` and switching
 
-The key is resolved by the catalog, so any of the model's aliases will work too. On failure the runner retries the call, then moves on to the next model in the chain; with `stickyFallback = true` the remaining turns run on the model that answered — there's no point going back to the one that failed.
+The key is looked up in the catalog. On failure the runner retries the call, then moves on to the next model in the chain; with `stickyFallback = true` the remaining turns run on the model that answered — there's no point going back to the one that failed.
 
 ## `maxTurns` — what a turn is
 
@@ -85,7 +85,7 @@ $config->extraParams = [
 ];
 ```
 
-Standard fields (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`) are not overridden through `extraParams`.
+Standard fields (`model`, `messages`, `temperature`, `top_p`, `max_tokens`, `tools`, `tool_choice`, `seed`, `stream`) are not overridden through `extraParams`.
 
 OpenRouter plugins are a special case of extra fields:
 

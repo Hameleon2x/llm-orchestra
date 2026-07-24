@@ -22,25 +22,25 @@ Each layer below knows nothing about the layer above it. The provider doesn't de
 
 ## Responsibilities
 
-- **`Registry`** — the catalog and its validation, resolving keys and aliases, the default policy and chain. Doesn't execute requests.
+- **`Registry`** — the catalog and its validation, resolving model keys, the default policy and chain. Doesn't execute requests.
 - **`Orchestra`** — merging settings, retries, model switching, the attempt log, writing to PSR-3. Doesn't know about the API format or the dialog content.
 - **`Provider\*`** — building the payload and parsing the response, classifying failures. Doesn't retry and doesn't pick the model.
-- **`Http\CurlChatClient`** — sending HTTP and transport errors. Doesn't parse the response body.
+- **`Http\CurlChatClient`** — sending HTTP and transport errors. Hands a successful body to the provider as is; parses only an error response, to attach a category to the failure.
 - **`Agent\Runner`** — the turn loop, executing tools, limits, resuming. Retries and model switching are not its concern.
 - **`Tool\*`, `Agent\Toolbox*`** — tool schemas and execution. Don't talk to the model.
 
 ## The path of a single request
 
-1. `Orchestra::execute($request, $modelKey)` resolves the model through the catalog (key, alias, or `defaultModel`).
+1. `Orchestra::execute($request, $modelKey)` looks the model up in the catalog by key; an empty key means `defaultModel`.
 2. `ResolvedCall::build()` merges three levels: catalog → model → call. Generation params by explicitness, arbitrary fields and headers recursively, `unsupported` stripped on top of everything.
 3. The provider builds the payload, calls the transport, parses the response, and applies the `capture` map.
 4. Success is a `Response` with `content`/`toolCalls`, `usage`, `extra`, and the raw response. Failure is an `LlmException` with a category.
-5. `Orchestra` records the attempt in the log, notifies the observer, and decides: retry, hand off to the next model in the chain, or return the error.
+5. `Orchestra` records the attempt in the log, decides — retry, hand off to the next model in the chain, or return the error — and notifies the observer with that decision already made (`willRetry`, `nextDelay`).
 6. `Runner` (when it's the one driving) executes tool calls, appends to the history, and moves to the next turn — now on the model that answered.
 
 ## Key decisions
 
-**The unit of choice is the model.** A provider describes the transport; a model is what gets called. The same model behind two providers is two catalog entries, so slugs never collide and neither `supportedModels` nor `priority` is needed.
+**The unit of choice is the model.** A provider describes the transport; a model is what gets called. The same model behind two providers is two catalog entries with different keys, so slugs never collide and the escalation order comes from a single list rather than per-provider priorities.
 
 **One flat fallback chain.** Models have no continuation lists of their own — otherwise you'd have to decide whose list wins on a nested failure. Models already tried are skipped, and the number of switches is capped.
 
@@ -54,7 +54,7 @@ Each layer below knows nothing about the layer above it. The provider doesn't de
 
 ## State
 
-The package holds no state between calls. `Registry` and `Orchestra` are immutable with respect to configuration (`with*` return copies), and `Runner` keeps no history — it arrives and is returned as an array of messages. A suspended run resumes through the same `run()` with tool answers appended; there's no separate resume API.
+The package holds no state between calls. `Orchestra` is immutable with respect to configuration (`with*` return copies), `Registry` is built once at startup and then only read, and `Runner` keeps no history — it arrives and is returned as an array of messages. A suspended run resumes through the same `run()` with tool answers appended; there's no separate resume API.
 
 ## Directory map
 
@@ -63,15 +63,16 @@ src/
   Registry.php            the catalog
   Orchestra.php           execution with policy
   Config/                 definitions: provider, model, params, policy
-  Dto/                    Request, Response, Message, ToolCall, Usage, AttemptLog, ResolvedCall
+  Dto/                    Request, Response, Message, ToolCall, ToolDefinition, Usage, AttemptLog, ResolvedCall
+  Enum/                   Role
   Error/                  ErrorCategory, ErrorInfo, ErrorMapper
   Exception/              LlmException, LlmConfigException
   Http/                   ChatClientInterface, CurlChatClient
   Provider/               ProviderInterface, BaseProvider, OpenAi/OpenRouter/Requesty
   Agent/                  Runner, Config, Result, Finish, Event, Toolbox
-  Tool/                   AbstractTool, SchemaBuilder, ToolArgsGuard, Dto
+  Tool/                   ToolInterface, AbstractTool, SchemaBuilder, ToolArgsGuard, Dto
   Factory/                Message/ToolCall/ToolDefinition ↔ array
-  Support/                ArrayPath, Merge, Sleeper
+  Support/                ArrayPath, Merge, Sleeper, SleeperInterface
 ```
 
 ## See also

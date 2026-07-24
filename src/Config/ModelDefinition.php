@@ -5,9 +5,9 @@ namespace Hameleon2x\Llm\Config;
 use Hameleon2x\Llm\Exception\LlmConfigException;
 
 /**
- * Модель в каталоге — единица выбора, настройки и политики. Ключ каталога хранится в базе
- * приложения и приходит из интерфейса; слаг для API лежит в `name` и может совпадать у двух
- * записей, привязанных к разным провайдерам.
+ * Модель в каталоге — единица выбора, настройки и политики. Имён у неё ровно два: ключ каталога
+ * (хранится в базе приложения и приходит из интерфейса) и слаг для API в `name`, который может
+ * совпадать у двух записей, привязанных к разным провайдерам.
  *
  * Отсюда же берётся пресет режима: две записи с одним `name`, но разными `extraParams` —
  * это «GLM-4.6» и «GLM-4.6 с глубоким мышлением» в списке выбора.
@@ -72,14 +72,6 @@ final class ModelDefinition
      */
     public array $tags = [];
 
-    /**
-     * Прежние идентификаторы модели: значения, сохранённые в базе до появления каталога,
-     * резолвятся в этот ключ.
-     *
-     * @var string[]
-     */
-    public array $aliases = [];
-
     /** Произвольные данные приложения (вес ротации, иконка, что угодно). */
     public array $meta = [];
 
@@ -114,7 +106,6 @@ final class ModelDefinition
         $definition->capture = (array)($config['capture'] ?? []);
         $definition->timeout = isset($config['timeout']) ? (int)$config['timeout'] : null;
         $definition->tags = (array)($config['tags'] ?? []);
-        $definition->aliases = (array)($config['aliases'] ?? []);
         $definition->meta = (array)($config['meta'] ?? []);
 
         if (isset($config['policy']) && is_array($config['policy'])) {

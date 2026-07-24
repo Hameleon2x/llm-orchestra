@@ -2,6 +2,7 @@
 
 namespace Hameleon2x\Llm\Http;
 
+use Hameleon2x\Llm\Error\ErrorCategory;
 use Hameleon2x\Llm\Error\ErrorMapper;
 use Hameleon2x\Llm\Exception\LlmException;
 use Psr\Log\LoggerInterface;
@@ -44,6 +45,14 @@ final class CurlChatClient implements ChatClientInterface
     {
         $payload['stream'] = false;
         $body = json_encode($payload, JSON_UNESCAPED_UNICODE);
+        if ($body === false) {
+            // Обычно это битая кодировка в сообщениях. Без явной ошибки провайдер получил бы пустое
+            // тело и ответил невнятным HTTP 400.
+            throw LlmException::of(
+                ErrorCategory::BAD_REQUEST,
+                'Запрос не сериализуется в JSON: ' . json_last_error_msg()
+            );
+        }
         $timeout = $timeout !== null && $timeout > 0 ? $timeout : $this->timeout;
 
         if ($this->debug) {
@@ -91,7 +100,8 @@ final class CurlChatClient implements ChatClientInterface
     }
 
     /**
-     * Обязательные заголовки плюс заголовки провайдера и модели. Перезаписать обязательные нельзя.
+     * Заголовки запроса: наши значения по умолчанию, поверх них — заголовки провайдера и модели.
+     * Авторизация ставится последней, поэтому подменить её конфигом нельзя.
      *
      * @param array<string, string> $extra
      * @return string[]

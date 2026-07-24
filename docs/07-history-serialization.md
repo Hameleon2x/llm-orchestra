@@ -83,6 +83,6 @@ Notes: don't include the system message in the transmitted history — `Runner` 
 
 ## See also
 
-- [docs/05-toolbox-and-runner.md](05-toolbox-and-runner.md) — how `Runner` consumes and updates the history.
-- [docs/08-config-reference.md](08-config-reference.md) — runtime parameters that don't belong in the transmitted history.
-- [docs/architecture.md](architecture.md) — where `MessageFactory` sits in the stack.
+- [05-toolbox-and-runner.md](05-toolbox-and-runner.md) — how `Runner` consumes and updates the history.
+- [08-config-reference.md](08-config-reference.md) — run parameters that don't belong in the transmitted history.
+- [architecture.md](architecture.md) — where `MessageFactory` sits in the stack.

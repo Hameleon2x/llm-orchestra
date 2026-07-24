@@ -18,6 +18,7 @@ use Hameleon2x\Llm\Error\ErrorCategory;
 use Hameleon2x\Llm\Error\ErrorInfo;
 use Hameleon2x\Llm\Factory\ToolCallFactory;
 use Hameleon2x\Llm\Orchestra;
+use Throwable;
 
 /**
  * Агентский цикл: запрос к модели → исполнение вызовов инструментов → повтор, пока модель не даст
@@ -32,7 +33,7 @@ use Hameleon2x\Llm\Orchestra;
  * $config->model = 'glm-4.6';
  *
  * $result = (new Runner($orchestra))->run($messages, $toolbox, fn() => 'Системный промт', $config);
- * echo $result->success ? $result->content : $result->error->category;
+ * echo $result->success ? $result->content : $result->finish;   // completed | error | suspended …
  * ```
  */
 class Runner
@@ -92,6 +93,21 @@ class Runner
                     $lastResponse
                 );
             }
+
+            // Бюджет вызовов мог кончиться уже на доборе: тогда идём сразу к добивке, а не тратим
+            // ещё один запрос к модели на ход, все вызовы которого всё равно будут отклонены.
+            if ($outcome['limitExhausted']) {
+                return $this->finishOnToolLimit(
+                    $orchestra,
+                    $messages,
+                    $systemPromptFn,
+                    $config,
+                    $currentModel,
+                    0,
+                    $usage,
+                    $attempts
+                );
+            }
         }
 
         for ($turn = 0; $turn < $config->maxTurns; $turn++) {
@@ -122,8 +138,12 @@ class Runner
             $request = $this->buildRequest($systemPrompt, $messages, $tools, $config);
             $response = $orchestra->execute($request, $currentModel);
 
-            $usage->add($response->usage, $response->modelKey);
             $attempts = array_merge($attempts, $response->attempts);
+            // Потребление считаем только по состоявшимся вызовам: у неудачной попытки блока usage
+            // нет, а число обращений к модели видно по журналу попыток.
+            if ($response->isSuccess()) {
+                $usage->add($response->usage, $response->modelKey);
+            }
 
             if (!$response->isSuccess()) {
                 return $this->finalize(
@@ -322,10 +342,24 @@ class Runner
         }
 
         $response = $orchestra->execute($request, $modelKey);
-        $usage->add($response->usage, $response->modelKey);
         $attempts = array_merge($attempts, $response->attempts);
+        if ($response->isSuccess()) {
+            $usage->add($response->usage, $response->modelKey);
+        }
 
-        if ($response->isSuccess() && trim((string)$response->content) !== '') {
+        // Сбой добивки — такой же сбой вызова модели, как и на любом обороте: отдаём ошибку с
+        // категорией, а не заглушку об исчерпанном лимите. История и результаты инструментов
+        // остаются в Result.
+        if (!$response->isSuccess()) {
+            return $this->finalize(
+                Result::error($response->error, $messages, $turnsUsed, $toolCallsUsed, $usage),
+                $modelKey,
+                $attempts,
+                null
+            );
+        }
+
+        if (trim((string)$response->content) !== '') {
             $messages[] = Message::assistant((string)$response->content);
 
             return $this->finalize(
@@ -356,7 +390,7 @@ class Runner
             ),
             $modelKey,
             $attempts,
-            $response->isSuccess() ? $response : null
+            $response
         );
     }
 
@@ -416,7 +450,15 @@ class Runner
                 }
             }
 
-            $result = $toolbox->execute($toolName, $args);
+            try {
+                $result = $toolbox->execute($toolName, $args);
+            } catch (Throwable $e) {
+                // Сбой инструмента — не сбой прогона: закрываем вызов ошибкой, модель увидит её на
+                // следующем ходу. Иначе исключение прикладного кода оборвало бы весь цикл и ход
+                // остался бы без ответов на уже сделанные вызовы.
+                $this->answerWithError($toolCall, 'Ошибка инструмента: ' . $e->getMessage(), $messages, $emit);
+                continue;
+            }
 
             if ($result->isSuspended()) {
                 // Инструмент ждёт внешнего ввода: tool-сообщение сейчас не пишем, только копим id.

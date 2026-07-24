@@ -13,7 +13,7 @@ The unit of choice is now the model, not the provider. Model catalog, one flat f
 
 ### Added
 
-- **`Registry` — a catalog of providers and models.** A provider describes transport only (class, token, `baseUrl`, timeout, headers); a model is a catalog key, an API slug (`name`), labels (`fullName`, `description`), generation params, an error policy and aliases. The same model behind two providers is two entries with different keys, so slugs never collide. The catalog is built from an array (`Registry::fromArray()`) or programmatically (`addProvider()`/`addModel()`) and is **validated as a whole at build time**: a missing provider, a typo in the fallback chain or a duplicate alias raises `LlmConfigException` right away instead of at failure time.
+- **`Registry` — a catalog of providers and models.** A provider describes transport only (class, token, `baseUrl`, timeout, headers); a model is a catalog key, an API slug (`name`), labels (`fullName`, `description`), generation params and an error policy. The same model behind two providers is two entries with different keys, so slugs never collide. The catalog is built from an array (`Registry::fromArray()`) or programmatically (`addProvider()`/`addModel()`) and is **validated as a whole at build time**: a missing provider or a typo in the fallback chain raises `LlmConfigException` right away instead of at failure time.
 - **`Orchestra` — the executor.** Takes a `Request` and a model key, applies the error policy, keeps an attempt log. It never throws: the result is a `Response` with either `content` or `error`. Copies with overrides: `withPolicy()`, `withFallback()`, `withObserver()`.
 - **One flat fallback chain per catalog.** `fallback` is an ordered list of keys, `maxSwitches` caps the switches per call. The failed model and everything already tried are skipped, so the question "whose continuation list wins" never arises. The policy's `then` (`fallback`/`stop`) is read from the run's starting model.
 - **Typed errors.** `Error\ErrorCategory` (`network`, `timeout`, `empty_response`, `rate_limit`, `server_error`, `invalid_response`, `model_unavailable`, `context_length`, `content_filter`, `auth`, `bad_request`, `deadline`, `config`, `unknown`), `Error\ErrorInfo` (category, HTTP status, provider code, model and provider keys, raw body, `is()`, `isConnectionDrop()`), and `Error\ErrorMapper` — the single place where cURL codes, HTTP statuses and error texts are interpreted; custom providers use it too.
@@ -30,7 +30,7 @@ The unit of choice is now the model, not the provider. Model catalog, one flat f
 
 ### Changed
 
-- **One retry level instead of two.** The transport no longer runs its own loop: retries are governed by the model policy (`retries`, `delay`, `backoff`, `maxDelay`, `perCategory`, `retryOn`, `stopOn`, `maxWaitSeconds`). Waiting time on failure is now predictable. `maxWaitSeconds` stops both retries and switches to further models in the chain; a request already in flight is bounded by the provider's or model's `timeout`.
+- **One retry level instead of two.** The transport no longer runs its own loop: retries are governed by the model policy (`retries`, `delay`, `backoff`, `maxDelay`, `perCategory`, `retryOn`, `stopOn`, `maxWaitSeconds`). Waiting time on failure is now predictable; a request already in flight is bounded by the provider's or model's `timeout`.
 - **The error policy is set at three levels and never mixed between them.** A `policy` section exists on a model and on a provider, and the catalog defines `defaultPolicy`. The closest one applies — the model's, then its provider's, then the catalog's — and it applies in full: unset fields take `ErrorPolicy` defaults rather than values from a neighbouring level. So the config shows what governs a given call without working out what overrides what.
 - **An empty turn is an `empty_response` error, not a "success" with a placeholder.** The `Runner` used to return the text "Нет ответа от модели." and callers had to compare strings.
 - **Truncated tool-call arguments** (cut off by the token limit) are reported as `invalid_response` — the tool is not executed on partial data.
@@ -39,6 +39,8 @@ The unit of choice is now the model, not the provider. Model catalog, one flat f
 - Generation parameters live in `Config\GenerationParams` (`temperature`, `topP`, `maxTokens`, `seed`) and merge by explicitness: catalog → model → call.
 - `Usage` moved from `Agent\Dto` to `Dto` — it is useful without the agent loop.
 - `Event::ASSISTANT_MESSAGE` meta now carries `extra` (including the model's reasoning), the turn's `usage` and the model key.
+- **Two time caps instead of one.** `maxWaitSeconds` in the policy caps **a single model** (its requests and the pauses between retries) and restarts after a switch, while the new catalog key `maxTotalWaitSeconds` caps **the whole call**, switches included. Previously the single cap lived in the model's policy yet measured the entire run, so a slow starting model ate the backups' budget.
+- **`Config::$maxTurns` now defaults to `40`** (with `maxToolCalls = 30`). Turns must cover every allowed tool call, otherwise the run hits the turn limit and returns a service placeholder instead of the model's final answer.
 
 ### Removed
 
@@ -138,7 +140,9 @@ Initial public release.
 - Exceptions: `LlmException`, `LlmProviderException`, `LlmRateLimitException`, `LlmValidationException`.
 - Enums: `Role`, `Status`, `Agent\Enum\Event`.
 
-[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.5...v0.3.0
 [0.2.5]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/Hameleon2x/llm-orchestra/compare/v0.2.1...v0.2.3

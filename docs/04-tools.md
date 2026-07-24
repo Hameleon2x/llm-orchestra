@@ -172,6 +172,8 @@ Result::suspend();                                        // pause: the result w
 
 A tool error is not an exception. Return `Result::error()` with text that makes it clear to the model what to fix: it will see it on the next turn and will be able to ask again or call the tool differently.
 
+If an exception does escape `execute()`, the loop catches it and closes the call with an error carrying the exception message — the run survives, but that message is technical and not written for the model.
+
 `Result::suspend()` stops the loop and waits for external input — for example, the user's answer to a clarifying question. Details: [13-human-in-the-loop.md](13-human-in-the-loop.md).
 
 ## Arguments come from the model, not from you

@@ -23,7 +23,7 @@ interface ProviderInterface
 }
 ```
 
-The catalog creates a provider as `new $class($definition, $logger)` — a constructor with that signature is mandatory. The easiest way is to extend `BaseProvider`: it provides the constructor, access to settings, the HTTP client, and applying the `capture` map.
+The executor creates a provider as `new $class($definition, $logger)` — a constructor with that signature is mandatory. The easiest way is to extend `BaseProvider`: it provides the constructor, access to settings, the HTTP client, and applying the `capture` map.
 
 ## What arrives in `ResolvedCall`
 

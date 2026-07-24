@@ -20,10 +20,12 @@ $orchestra = new Orchestra(Registry::fromArray($config), $logger);
 
 ## What exactly is logged
 
-Five entries, each with context as an associative array (PSR-3 style):
+The entries, each with context as an associative array (PSR-3 style):
 
 - `warning` **`LLM attempt failed`** — a model call attempt failed. Context: `model`, `provider`, `attempt`, `category`, `message`.
-- `warning` **`LLM wait budget exhausted, stopping retries`** — the `maxWaitSeconds` wait budget is exhausted. Context: `model`, `maxWaitSeconds`.
+- `warning` **`LLM model wait budget exhausted, stopping retries`** — the model spent its own `maxWaitSeconds` budget, retries stopped. Context: `model`, `maxWaitSeconds`.
+- `warning` **`LLM total wait budget exhausted, ...`** — the call's `maxTotalWaitSeconds` budget is spent; the tail of the message says what exactly stopped — `stopping retries` or `stopping model switches`. Context: `model`, `maxTotalWaitSeconds`.
+- `warning` **`LLM attempt observer failed`** — the attempt observer (`withObserver()`) threw. The run continues: a broken progress channel must not break the model call. Context: `model`, `message`.
 - `info` **`LLM switching to next model in fallback chain`** — work has been handed over to the next model in the chain. Context: `from`, `to`, `category`.
 - `error` **`LLM all attempts exhausted`** — retries and switches didn't help, the request failed. Context: `model`, `category`, `message`, `attempts`.
 - `debug` **`LLM request` / `LLM response`** — the outgoing payload and the raw response; only when the provider has `'debug' => true`. Context: `url`, `payload` and `status`, `body`.

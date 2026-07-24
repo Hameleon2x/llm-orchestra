@@ -20,10 +20,12 @@ $orchestra = new Orchestra(Registry::fromArray($config), $logger);
 
 ## Что именно логируется
 
-Пять записей, каждая с контекстом в виде ассоциативного массива (стиль PSR-3):
+Записи, каждая с контекстом в виде ассоциативного массива (стиль PSR-3):
 
 - `warning` **`LLM attempt failed`** — попытка вызова модели не удалась. Контекст: `model`, `provider`, `attempt`, `category`, `message`.
-- `warning` **`LLM wait budget exhausted, stopping retries`** — исчерпан бюджет ожидания `maxWaitSeconds`. Контекст: `model`, `maxWaitSeconds`.
+- `warning` **`LLM model wait budget exhausted, stopping retries`** — модель исчерпала свой бюджет времени `maxWaitSeconds`, повторы прекращены. Контекст: `model`, `maxWaitSeconds`.
+- `warning` **`LLM total wait budget exhausted, ...`** — исчерпан общий бюджет вызова `maxTotalWaitSeconds`; окончание сообщения говорит, что именно прекращено, — `stopping retries` или `stopping model switches`. Контекст: `model`, `maxTotalWaitSeconds`.
+- `warning` **`LLM attempt observer failed`** — наблюдатель попыток (`withObserver()`) бросил исключение. Прогон продолжается: сбой канала прогресса не должен ломать вызов модели. Контекст: `model`, `message`.
 - `info` **`LLM switching to next model in fallback chain`** — работа передана следующей модели цепочки. Контекст: `from`, `to`, `category`.
 - `error` **`LLM all attempts exhausted`** — повторы и переключения не помогли, запрос провалился. Контекст: `model`, `category`, `message`, `attempts`.
 - `debug` **`LLM request` / `LLM response`** — исходящий payload и сырой ответ; только при `'debug' => true` у провайдера. Контекст: `url`, `payload` и `status`, `body`.

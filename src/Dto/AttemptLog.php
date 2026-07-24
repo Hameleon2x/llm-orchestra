@@ -63,6 +63,7 @@ final class AttemptLog
             'latency'     => round($this->latency, 3),
             'delayBefore' => $this->delayBefore,
             'willRetry'   => $this->willRetry,
+            'nextDelay'   => $this->nextDelay,
             'error'       => $this->error !== null ? $this->error->toArray() : null,
         ];
     }

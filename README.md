@@ -45,22 +45,20 @@ Everything beyond `providers` and `models` is optional: the fallback chain, retr
 
 ## Documentation
 
-| I want to...                                                | Read                                                                  |
-|-------------------------------------------------------------|-----------------------------------------------------------------------|
-| Send my first request                                       | [docs/01-getting-started.md](docs/01-getting-started.md)                |
-| Describe the model catalog and the fallback chain           | [docs/02-catalog-and-fallback.md](docs/02-catalog-and-fallback.md)      |
-| Wire up PSR-3 logging (Monolog, Yii2, etc.)                 | [docs/03-logging.md](docs/03-logging.md)                                |
-| Write my own tool (function calling)                        | [docs/04-tools.md](docs/04-tools.md)                                    |
-| Run the agent loop (tools + multiple turns)                 | [docs/05-toolbox-and-runner.md](docs/05-toolbox-and-runner.md)          |
-| Receive agent loop events (UI progress, DB logging)         | [docs/06-events.md](docs/06-events.md)                                  |
-| Understand errors, retries and model switching              | [docs/10-error-handling.md](docs/10-error-handling.md)                  |
-| Pause for user input and resume (human-in-the-loop)         | [docs/13-human-in-the-loop.md](docs/13-human-in-the-loop.md)            |
-| See the full documentation index                            | [docs/README.md](docs/README.md)                                        |
+- Send my first request — [01-getting-started.md](docs/01-getting-started.md)
+- Describe the model catalog and the fallback chain — [02-catalog-and-fallback.md](docs/02-catalog-and-fallback.md)
+- Wire up PSR-3 logging (Monolog, Yii2, etc.) — [03-logging.md](docs/03-logging.md)
+- Write my own tool (function calling) — [04-tools.md](docs/04-tools.md)
+- Run the agent loop (tools + multiple turns) — [05-toolbox-and-runner.md](docs/05-toolbox-and-runner.md)
+- Receive agent loop events (UI progress, DB logging) — [06-events.md](docs/06-events.md)
+- Understand errors, retries and model switching — [10-error-handling.md](docs/10-error-handling.md)
+- Pause for user input and resume (human-in-the-loop) — [13-human-in-the-loop.md](docs/13-human-in-the-loop.md)
+- See the full documentation index — [docs/README.md](docs/README.md)
 
 ## Requirements
 
 - PHP 7.4+
-- `ext-curl`, `ext-json`
+- `ext-curl`, `ext-json`, `ext-mbstring`
 - `psr/log` ^1.1 || ^2.0 || ^3.0
 
 ## Versioning

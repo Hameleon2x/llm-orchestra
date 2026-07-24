@@ -13,7 +13,8 @@ use Hameleon2x\Llm\Exception\LlmConfigException;
  *
  * Собирается из массива конфигурации приложения и проверяется целиком при сборке — опечатка в
  * ключе цепочки или ссылка на несуществующий провайдер обнаруживается сразу, а не в момент сбоя.
- * Каталог можно собрать и программно (addProvider/addModel), если он хранится, например, в базе.
+ * Каталог, который хранится в базе, тоже собирается через fromArray: соберите массив и передайте
+ * его целиком. addProvider/addModel дописывают отдельные записи в уже собранный каталог.
  *
  * ```php
  * $registry = Registry::fromArray([
@@ -31,9 +32,6 @@ final class Registry
     /** @var array<string, ModelDefinition> */
     private array $models = [];
 
-    /** @var array<string, string> алиас => ключ модели */
-    private array $aliases = [];
-
     private GenerationParams $defaultParams;
 
     private ErrorPolicy $defaultPolicy;
@@ -43,6 +41,13 @@ final class Registry
 
     /** Сколько раз за один вызов разрешено переключиться на следующую модель цепочки. */
     private int $maxSwitches = 2;
+
+    /**
+     * Потолок времени на весь вызов, секунды: все модели, все их повторы и паузы. Ограничитель
+     * прогона, а не модели, поэтому живёт рядом с цепочкой и maxSwitches, а не в политике ошибок.
+     * null — без потолка.
+     */
+    private ?float $maxTotalWaitSeconds = null;
 
     private ?string $defaultModel = null;
 
@@ -55,7 +60,8 @@ final class Registry
     /**
      * Собрать каталог из конфигурации приложения.
      *
-     * Ключи: providers, models, defaultModel, defaultParams, defaultPolicy, fallback, maxSwitches.
+     * Ключи: providers, models, defaultModel, defaultParams, defaultPolicy, fallback, maxSwitches,
+     * maxTotalWaitSeconds.
      */
     public static function fromArray(array $config): self
     {
@@ -80,6 +86,11 @@ final class Registry
         if (isset($config['maxSwitches'])) {
             $registry->maxSwitches = max(0, (int)$config['maxSwitches']);
         }
+        if (array_key_exists('maxTotalWaitSeconds', $config)) {
+            $registry->maxTotalWaitSeconds = $config['maxTotalWaitSeconds'] !== null
+                ? (float)$config['maxTotalWaitSeconds']
+                : null;
+        }
         if (isset($config['defaultModel']) && $config['defaultModel'] !== '') {
             $registry->defaultModel = (string)$config['defaultModel'];
         }
@@ -99,10 +110,6 @@ final class Registry
     public function addModel(ModelDefinition $model): self
     {
         $this->models[$model->key] = $model;
-
-        foreach ($model->aliases as $alias) {
-            $this->aliases[(string)$alias] = $model->key;
-        }
 
         return $this;
     }
@@ -129,27 +136,19 @@ final class Registry
             }
         }
 
-        foreach ($this->aliases as $alias => $modelKey) {
-            if (isset($this->models[$alias])) {
-                throw new LlmConfigException(
-                    "Алиас «{$alias}» модели «{$modelKey}» совпадает с ключом другой модели."
-                );
-            }
-        }
-
         foreach ($this->fallback as $modelKey) {
-            if (!isset($this->models[$modelKey])) {
+            if ($this->findModel((string)$modelKey) === null) {
                 throw new LlmConfigException("Цепочка фолбэка: модель «{$modelKey}» не найдена в каталоге.");
             }
         }
 
-        if ($this->defaultModel !== null && !isset($this->models[$this->defaultModel])) {
+        if ($this->defaultModel !== null && $this->findModel($this->defaultModel) === null) {
             throw new LlmConfigException("Модель по умолчанию «{$this->defaultModel}» не найдена в каталоге.");
         }
     }
 
     /**
-     * Модель по ключу или алиасу.
+     * Модель по ключу каталога.
      *
      * @throws LlmConfigException если модели нет
      */
@@ -164,21 +163,15 @@ final class Registry
     }
 
     /**
-     * Модель по ключу или алиасу; null, если такой нет.
+     * Модель по ключу каталога; null, если такой нет.
      */
     public function findModel(?string $key): ?ModelDefinition
     {
         if ($key === null || $key === '') {
             return null;
         }
-        if (isset($this->models[$key])) {
-            return $this->models[$key];
-        }
-        if (isset($this->aliases[$key])) {
-            return $this->models[$this->aliases[$key]];
-        }
 
-        return null;
+        return $this->models[$key] ?? null;
     }
 
     public function has(string $key): bool
@@ -333,6 +326,14 @@ final class Registry
     public function maxSwitches(): int
     {
         return $this->maxSwitches;
+    }
+
+    /**
+     * Потолок времени на весь вызов, секунды. null — без потолка.
+     */
+    public function maxTotalWaitSeconds(): ?float
+    {
+        return $this->maxTotalWaitSeconds;
     }
 
     /**
